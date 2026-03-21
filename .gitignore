@@ -1,8 +1,8 @@
 # Build artifacts
 dist/
 build/
-techtell
-techtell.exe
+/techtell
+/techtell.exe
 
 # Test and profiling
 coverage.out

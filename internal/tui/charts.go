@@ -79,10 +79,10 @@ func BarChart(data map[string]int, width int) string {
 			style = lipgloss.NewStyle().Foreground(ColorInfo)
 		}
 
-		sb.WriteString(fmt.Sprintf("%-*s %s %s\n",
+		fmt.Fprintf(&sb, "%-*s %s %s\n",
 			maxLabelWidth, k,
 			style.Render(bar),
-			StyleStatValue.Render(fmt.Sprintf("%d", val))))
+			StyleStatValue.Render(fmt.Sprintf("%d", val)))
 	}
 
 	return sb.String()

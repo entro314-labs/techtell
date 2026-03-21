@@ -31,8 +31,6 @@ const (
 	StateError
 )
 
-type analysisMsg *analysis.WorkspaceReport
-type progressMsg string
 type errMsg error
 type rootsFoundMsg discoveryResult
 type scanUpdateMsg string
@@ -174,7 +172,7 @@ func InitialModel() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, spinner.Tick)
+	return tea.Batch(textinput.Blink, m.Spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
