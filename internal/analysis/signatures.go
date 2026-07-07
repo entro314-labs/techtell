@@ -16,7 +16,7 @@ const (
 
 type TechSignature struct {
 	Name        string
-	Category    string // "Language", "Framework", "Tool", "Database"
+	Category    string // "Language", "Framework", "Package Manager", "Build Tool", "Tool", "Library", "DevOps", "Cloud"
 	MatchType   MatchType
 	Identifiers []string // filenames or extensions
 }
@@ -24,18 +24,19 @@ type TechSignature struct {
 var Signatures = []TechSignature{
 	// Languages
 	{Name: "Go", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".go"}},
-	{Name: "Go Module", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"go.mod"}},
+	{Name: "Go", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"go.mod"}},
 	{Name: "JavaScript", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".js", ".jsx", ".mjs"}},
 	{Name: "TypeScript", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".ts", ".tsx"}},
 	{Name: "Python", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".py"}},
+	{Name: "Python", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"requirements.txt", "pyproject.toml", "Pipfile", "uv.lock"}},
 	{Name: "Rust", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".rs"}},
-	{Name: "Rust Crate", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"Cargo.toml"}},
+	{Name: "Rust", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"Cargo.toml"}},
 	{Name: "Java", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".java"}},
 	{Name: "Kotlin", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".kt", ".kts"}},
 	{Name: "C++", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".cpp", ".cc", ".cxx", ".hpp"}},
 	{Name: "C", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".c", ".h"}},
 	{Name: "Ruby", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".rb"}},
-	{Name: "Gemfile", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"Gemfile"}},
+	{Name: "Ruby", Category: "Language", MatchType: MatchTypeFile, Identifiers: []string{"Gemfile"}},
 	{Name: "PHP", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".php"}},
 	{Name: "HTML", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".html", ".htm"}},
 	{Name: "CSS", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".css"}},
@@ -82,9 +83,25 @@ var Signatures = []TechSignature{
 	{Name: "Android", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"com.android.application", "com.android.library", "androidx.core"}},
 	{Name: "Hibernate", Category: "Library", MatchType: MatchTypeDependency, Identifiers: []string{"hibernate-core"}},
 
+	// Package Managers
+	{Name: "go mod", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"go.mod"}},
+	{Name: "cargo", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Cargo.toml"}},
+	{Name: "pip", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"requirements.txt"}},
+	{Name: "pipenv", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Pipfile"}},
+	{Name: "uv", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"uv.lock"}},
+	{Name: "poetry/pip", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pyproject.toml"}},
+	{Name: "Maven", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pom.xml"}},
+	{Name: "Bundler", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Gemfile"}},
+	{Name: "Composer", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"composer.json"}},
+	{Name: "Gradle", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"build.gradle", "build.gradle.kts", "gradlew"}},
+	{Name: "NPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"package-lock.json"}},
+	{Name: "Yarn", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"yarn.lock"}},
+	{Name: "PNPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pnpm-lock.yaml"}},
+	{Name: "Bun", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"bun.lockb"}},
+
 	// Tools (Shell & Others)
 	{Name: "Shell Script", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".sh", ".bash", ".zsh"}},
-	{Name: "curl", Category: "Tool", MatchType: MatchTypeContent, Identifiers: []string{"curl"}}, // Content match (TODO: implement content match scanner)
+	{Name: "curl", Category: "Tool", MatchType: MatchTypeContent, Identifiers: []string{"curl"}},
 	{Name: "wget", Category: "Tool", MatchType: MatchTypeContent, Identifiers: []string{"wget"}},
 	{Name: "jq", Category: "Tool", MatchType: MatchTypeContent, Identifiers: []string{"jq"}},
 	{Name: "Helm", Category: "Tool", MatchType: MatchTypeFile, Identifiers: []string{"Chart.yaml"}},
@@ -101,19 +118,17 @@ var Signatures = []TechSignature{
 	{Name: "Netlify", Category: "Cloud", MatchType: MatchTypeFile, Identifiers: []string{"netlify.toml"}},
 	{Name: "Vite", Category: "Build Tool", MatchType: MatchTypeFile, Identifiers: []string{"vite.config.js", "vite.config.ts"}},
 	{Name: "Vite", Category: "Build Tool", MatchType: MatchTypeDependency, Identifiers: []string{"vite"}},
-	{Name: "NPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"package-lock.json"}},
-	{Name: "Yarn", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"yarn.lock"}},
-	{Name: "PNPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pnpm-lock.yaml"}},
-	{Name: "Bun", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"bun.lockb"}},
-	{Name: "Gradle", Category: "Build Tool", MatchType: MatchTypeFile, Identifiers: []string{"build.gradle", "build.gradle.kts", "gradlew"}},
 }
 
 // Matches checks if a given filename (base name) matches the signature
 func (s TechSignature) Matches(filename string) bool {
 	switch s.MatchType {
 	case MatchTypeFile:
+		normFile := filepath.ToSlash(filename)
+		base := filepath.Base(normFile)
 		for _, id := range s.Identifiers {
-			if strings.EqualFold(filename, id) {
+			normID := filepath.ToSlash(id)
+			if strings.EqualFold(base, normID) || strings.EqualFold(normFile, normID) {
 				return true
 			}
 		}

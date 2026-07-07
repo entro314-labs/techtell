@@ -232,7 +232,7 @@ func (m Model) viewError() string {
 			"%s\n\nError: %v\n\n%s",
 			StyleTitle.Render("Error"),
 			m.Err,
-			StyleHeader.Render("(q) to quit, (r) to restart"),
+			StyleHeader.Render("(r/enter/esc) restart, (q) quit"),
 		),
 	)
 }

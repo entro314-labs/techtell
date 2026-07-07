@@ -31,6 +31,8 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		TopLanguage     string
 		TopStack        string
 		TopPkgMgr       string
+		Projects        []analysis.Project
+		Warnings        []string
 		Languages       []ChartItem
 		Stacks          []ChartItem
 		PkgManagers     []ChartItem
@@ -76,10 +78,14 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		if k == "" {
 			k = "Unknown"
 		}
+		percent := 0.0
+		if totalLang > 0 {
+			percent = float64(v) / float64(totalLang) * 100
+		}
 		langItems = append(langItems, ChartItem{
 			Name:    k,
 			Count:   v,
-			Percent: float64(v) / float64(totalLang) * 100,
+			Percent: percent,
 		})
 	}
 	sort.Slice(langItems, func(i, j int) bool {
@@ -104,10 +110,14 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		if k == "" {
 			k = "Unknown"
 		}
+		percent := 0.0
+		if maxStack > 0 {
+			percent = float64(v) / float64(maxStack) * 100
+		}
 		stackItems = append(stackItems, ChartItem{
 			Name:    k,
 			Count:   v,
-			Percent: float64(v) / float64(maxStack) * 100,
+			Percent: percent,
 		})
 	}
 	sort.Slice(stackItems, func(i, j int) bool {
@@ -132,10 +142,14 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		if k == "" {
 			k = "Unknown"
 		}
+		percent := 0.0
+		if maxPkg > 0 {
+			percent = float64(v) / float64(maxPkg) * 100
+		}
 		pkgItems = append(pkgItems, ChartItem{
 			Name:    k,
 			Count:   v,
-			Percent: float64(v) / float64(maxPkg) * 100,
+			Percent: percent,
 		})
 	}
 	sort.Slice(pkgItems, func(i, j int) bool {
@@ -164,6 +178,8 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		TopLanguage:     getTop(r.LangCounts),
 		TopStack:        getTop(r.StackCounts),
 		TopPkgMgr:       getTop(r.PkgMgrCounts),
+		Projects:        r.Projects,
+		Warnings:        r.Errors,
 		Languages:       langItems,
 		Stacks:          stackItems,
 		PkgManagers:     pkgItems,
@@ -202,10 +218,10 @@ func generatePieChart(items []ChartItem, cx, cy, r float64) string {
 			largeArc = "1"
 		}
 
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<path d="M %.1f %.1f L %.1f %.1f A %.1f %.1f 0 %s 1 %.1f %.1f Z" fill="%s" stroke="#0a0a0f" stroke-width="2"/>`,
 			cx, cy, x1, y1, r, r, largeArc, x2, y2, item.Color,
-        )
+		)
 
 		startAngle = endAngle
 	}
@@ -225,10 +241,10 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 	// Draw grid circles
 	for i := 1; i <= 4; i++ {
 		r := maxR * float64(i) / 4
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="#1e293b" stroke-width="1"/>`,
 			cx, cy, r,
-        )
+		)
 	}
 
 	// Draw axis lines
@@ -236,10 +252,10 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 		angle := float64(i)*angleStep - math.Pi/2
 		x := cx + maxR*math.Cos(angle)
 		y := cy + maxR*math.Sin(angle)
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#1e293b" stroke-width="1"/>`,
 			cx, cy, x, y,
-        )
+		)
 	}
 
 	// Find max for scaling
@@ -248,6 +264,9 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 		if item.Percent > maxVal {
 			maxVal = item.Percent
 		}
+	}
+	if maxVal <= 0 {
+		return sb.String()
 	}
 
 	// Draw data polygon
@@ -260,12 +279,12 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 		if i > 0 {
 			points.WriteString(" ")
 		}
-        fmt.Fprintf(&points, "%.1f,%.1f", x, y)
+		fmt.Fprintf(&points, "%.1f,%.1f", x, y)
 	}
-    fmt.Fprintf(&sb,
+	fmt.Fprintf(&sb,
 		`<polygon points="%s" fill="rgba(34, 211, 238, 0.3)" stroke="#22d3ee" stroke-width="2"/>`,
 		points.String(),
-    )
+	)
 
 	// Draw data points
 	for i, item := range items {
@@ -273,10 +292,10 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 		r := (item.Percent / maxVal) * maxR * 0.9
 		x := cx + r*math.Cos(angle)
 		y := cy + r*math.Sin(angle)
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<circle cx="%.1f" cy="%.1f" r="4" fill="%s"/>`,
 			x, y, item.Color,
-        )
+		)
 	}
 
 	// Draw labels
@@ -291,10 +310,10 @@ func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {
 		} else if x > cx+10 {
 			anchor = "start"
 		}
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<text x="%.1f" y="%.1f" fill="#94a3b8" font-size="10" font-family="JetBrains Mono, monospace" text-anchor="%s">%s</text>`,
 			x, y+3, anchor, html.EscapeString(truncateLabel(item.Name, 12)),
-        )
+		)
 	}
 
 	return sb.String()
@@ -308,14 +327,17 @@ func generateStackedBars(langs []ChartItem, stacks []ChartItem) string {
 	for _, item := range langs {
 		totalWidth += item.Percent
 	}
+	if totalWidth <= 0 {
+		return sb.String()
+	}
 
 	x := 0.0
 	for _, item := range langs {
 		width := (item.Percent / totalWidth) * 100
-        fmt.Fprintf(&sb,
+		fmt.Fprintf(&sb,
 			`<rect x="%.2f%%" y="0" width="%.2f%%" height="24" fill="%s"/>`,
 			x, width, item.Color,
-        )
+		)
 		x += width
 	}
 
@@ -756,8 +778,49 @@ const htmlTemplate = `<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="stacked-section">
+            <h3>Project Inventory</h3>
+            <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.72rem;">
+                    <thead>
+                        <tr style="border-bottom:1px solid #1e293b; color:#94a3b8;">
+                            <th style="text-align:left; padding:8px;">Project</th>
+                            <th style="text-align:left; padding:8px;">Stack</th>
+                            <th style="text-align:left; padding:8px;">Language</th>
+                            <th style="text-align:left; padding:8px;">Package Manager</th>
+                            <th style="text-align:left; padding:8px;">Tags</th>
+                            <th style="text-align:left; padding:8px;">Path</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Projects}}
+                        <tr style="border-bottom:1px solid #1e293b;">
+                            <td style="padding:8px;">{{.Name}}</td>
+                            <td style="padding:8px;">{{.Stack}}</td>
+                            <td style="padding:8px;">{{.Language}}</td>
+                            <td style="padding:8px;">{{.PackageManager}}</td>
+                            <td style="padding:8px;">{{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t}}{{end}}</td>
+                            <td style="padding:8px;"><code>{{.Path}}</code></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {{if .Warnings}}
+        <div class="stacked-section">
+            <h3>Warnings</h3>
+            <div style="display:flex; flex-direction:column; gap:8px; font-size:0.72rem; color:#fbbf24;">
+                {{range .Warnings}}
+                <div>{{.}}</div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
         <footer class="footer">
-            <p class="tagline">"hey, that's mostly my stacks and langs — what's yours?"</p>
+            <p class="tagline">"hey, that's mostly my stacks and langs - what's yours?"</p>
             <p class="credits">generated by <a href="#">techtell</a> // share your coding dna</p>
         </footer>
     </div>

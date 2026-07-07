@@ -65,6 +65,12 @@ Check version:
 techtell --version
 ```
 
+Show help:
+
+```bash
+techtell --help
+```
+
 ## Using the TUI
 
 1. Launch `techtell`.
@@ -81,9 +87,10 @@ techtell --version
 |---|---|
 | `Enter` | Start scan / select |
 | `Tab` / `Shift+Tab` | Switch result views |
+| `r` | Restart from error screen |
 | `s` | Save Markdown report |
 | `h` | Save HTML report |
-| `Esc` / `Backspace` | Back |
+| `Esc` / `Backspace` | Back / cancel scan |
 | `q` / `Ctrl+C` | Quit |
 
 ## Output files
@@ -108,6 +115,32 @@ make check          # fmt + lint + test
 make build-all      # cross-platform builds
 make release-check  # validate goreleaser config
 make release-snapshot
+```
+
+### Tagging a new release version
+
+To create and push a semantic version tag on the latest commit, use:
+
+```bash
+make tag-release BUMP=patch
+```
+
+Where `BUMP` is one of:
+
+- `major` → `v2.0.0`
+- `minor` → `v1.3.0`
+- `patch` → `v1.2.4`
+
+Optional remote override:
+
+```bash
+make tag-release BUMP=minor REMOTE=upstream
+```
+
+Dry-run example (without creating/pushing):
+
+```bash
+./scripts/tag-release.sh --bump patch --dry-run
 ```
 
 ## Docker
@@ -139,3 +172,5 @@ The CI pipeline runs:
 ## Security
 
 See [`SECURITY.md`](./SECURITY.md) for vulnerability reporting and release verification guidance.
+
+For release-signing architecture across local + CI environments, see [`docs/release-signing-360.md`](./docs/release-signing-360.md).

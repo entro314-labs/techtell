@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -64,8 +65,8 @@ func NewAnalyzer(root string, exclude []string) *Analyzer {
 func (a *Analyzer) DiscoverProjects(ctx context.Context, updateChan chan<- string) ([]string, error) {
 	var paths []string
 	var lastUpdate time.Time
+	a.Warnings = nil
 
-	// Fast walk
 	err := filepath.WalkDir(a.rootPath, func(path string, d fs.DirEntry, err error) error {
 		select {
 		case <-ctx.Done():
@@ -74,77 +75,37 @@ func (a *Analyzer) DiscoverProjects(ctx context.Context, updateChan chan<- strin
 		}
 
 		if err != nil {
-			// Log permission errors or access issues but continue walking
+			// Log permission errors or access issues but continue walking.
 			a.Warnings = append(a.Warnings, fmt.Sprintf("checking path %s failed: %v", path, err))
 			return nil
 		}
 
-		if d.IsDir() {
-			// Send update (Throttled to max 20fps to keep UI responsive)
-			if updateChan != nil && time.Since(lastUpdate) > 50*time.Millisecond {
-				select {
-				case updateChan <- path:
-					lastUpdate = time.Now()
-				default:
-					// Drop update if channel full or blocked
-				}
-			}
+		if !d.IsDir() {
+			return nil
+		}
 
-			// Exclude logic
-			if isExcluded(d.Name(), a.exclude) {
-				return filepath.SkipDir
-			}
-
-			// Marker check
-			if isProjectRoot(path) {
-				paths = append(paths, path)
-
-				// Smart Recursion:
-				// If this project does NOT look like a monorepo, stop recursing.
-				// This prevents finding "CMakeLists.txt" deep inside a "package.json" project.
-				if !isMonorepo(path) {
-					return filepath.SkipDir
-				}
+		if updateChan != nil && time.Since(lastUpdate) > 50*time.Millisecond {
+			select {
+			case updateChan <- path:
+				lastUpdate = time.Now()
+			default:
+				// Drop update if channel is full or blocked.
 			}
 		}
+
+		if isExcluded(d.Name(), a.exclude) {
+			return filepath.SkipDir
+		}
+
+		if isProjectRoot(path) {
+			paths = append(paths, path)
+		}
+
 		return nil
 	})
+
+	sort.Strings(paths)
 	return paths, err
-}
-
-func isMonorepo(path string) bool {
-	// Check for explicit workspace markers
-	if _, err := os.Stat(filepath.Join(path, "pnpm-workspace.yaml")); err == nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(path, "lerna.json")); err == nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(path, "rush.json")); err == nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(path, "go.work")); err == nil {
-		return true
-	}
-
-	// Check package.json for "workspaces"
-	if content, err := os.ReadFile(filepath.Join(path, "package.json")); err == nil {
-		if strings.Contains(string(content), "\"workspaces\"") {
-			return true
-		}
-	}
-
-	// Check for common monorepo folders? (packages, apps, libs)
-	// Only if they exist and are directories?
-	// Let's be conservative. If it has "packages" folder, suspect monorepo.
-	if info, err := os.Stat(filepath.Join(path, "packages")); err == nil && info.IsDir() {
-		return true
-	}
-	if info, err := os.Stat(filepath.Join(path, "apps")); err == nil && info.IsDir() {
-		return true
-	}
-
-	return false
 }
 
 // InspectProject analyzes a single project path
@@ -168,7 +129,9 @@ func isProjectRoot(path string) bool {
 		"package.json",
 		"Cargo.toml",
 		"requirements.txt", "pyproject.toml", "Pipfile", "uv.lock", "setup.py",
-		"pom.xml", "mix.exs", "docker-compose.yml", "Dockerfile",
+		"Gemfile", "composer.json",
+		"pom.xml", "build.gradle", "build.gradle.kts", "mix.exs",
+		"docker-compose.yml", "docker-compose.yaml", "Dockerfile",
 		"mise.toml", ".mise.toml",
 		"CMakeLists.txt",
 	}
@@ -181,14 +144,15 @@ func isProjectRoot(path string) bool {
 }
 
 type projectContext struct {
-	files    []string
-	content  map[string]string // filename -> content
-	depFiles []string          // list of dependency file names found
+	files        []string
+	content      map[string]string // filename -> content (for content signatures)
+	dependencies map[string]struct{}
 }
 
 func loadProjectContext(root string) *projectContext {
 	ctx := &projectContext{
-		content: make(map[string]string),
+		content:      make(map[string]string),
+		dependencies: make(map[string]struct{}),
 	}
 
 	entries, err := os.ReadDir(root)
@@ -196,34 +160,67 @@ func loadProjectContext(root string) *projectContext {
 		return ctx
 	}
 
+	fileSet := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		ctx.files = append(ctx.files, e.Name())
+		fileSet[e.Name()] = struct{}{}
 	}
 
-	// Pre-load common dependency files
 	depCandidates := []string{
 		"package.json", "go.mod", "Cargo.toml",
-		"requirements.txt", "pyproject.toml", "Pipfile",
-		"build.gradle", "pom.xml", "cpanfile", "Gemfile", "composer.json",
+		"requirements.txt", "pyproject.toml", "Pipfile", "uv.lock",
+		"build.gradle", "build.gradle.kts", "pom.xml", "cpanfile", "Gemfile", "composer.json",
 	}
 
 	for _, d := range depCandidates {
-		// Only load if it exists in file list (avoid redundant stats)
-		found := false
-		for _, f := range ctx.files {
-			if f == d {
-				found = true
-				break
-			}
+		if _, ok := fileSet[d]; !ok {
+			continue
 		}
-		if found {
-			ctx.depFiles = append(ctx.depFiles, d)
-			b, err := os.ReadFile(filepath.Join(root, d))
-			if err == nil {
-				ctx.content[d] = string(b)
+		b, err := os.ReadFile(filepath.Join(root, d))
+		if err != nil {
+			continue
+		}
+		raw := string(b)
+		ctx.content[d] = raw
+
+		parser, ok := Parsers[d]
+		if !ok {
+			continue
+		}
+		deps, err := parser(b)
+		if err != nil {
+			continue
+		}
+		for _, dep := range deps {
+			norm := normalizeToken(dep)
+			if norm != "" {
+				ctx.dependencies[norm] = struct{}{}
 			}
 		}
 	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if _, alreadyLoaded := ctx.content[name]; alreadyLoaded {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".sh" && ext != ".bash" && ext != ".zsh" && ext != ".ps1" && name != "Makefile" && name != "Dockerfile" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			continue
+		}
+		if len(b) > 256*1024 {
+			continue
+		}
+		ctx.content[name] = string(b)
+	}
+
 	return ctx
 }
 
@@ -238,15 +235,27 @@ func identProject(root string, name string) Project {
 
 	ctx := loadProjectContext(root)
 
-	// Single pass filtering using Signatures
 	for _, sig := range Signatures {
 		matched := false
 
 		switch sig.MatchType {
 		case MatchTypeFile:
-			for _, f := range ctx.files {
-				if sig.Matches(f) {
-					matched = true
+			for _, id := range sig.Identifiers {
+				normID := filepath.ToSlash(id)
+				if strings.Contains(normID, "/") || strings.Contains(normID, "\\") {
+					if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(normID))); err == nil {
+						matched = true
+						break
+					}
+					continue
+				}
+				for _, f := range ctx.files {
+					if strings.EqualFold(f, id) {
+						matched = true
+						break
+					}
+				}
+				if matched {
 					break
 				}
 			}
@@ -258,10 +267,21 @@ func identProject(root string, name string) Project {
 				}
 			}
 		case MatchTypeDependency:
-			// search in all loaded dependency content
+			for _, id := range sig.Identifiers {
+				normID := normalizeToken(id)
+				if normID == "" {
+					continue
+				}
+				if _, ok := ctx.dependencies[normID]; ok {
+					matched = true
+					break
+				}
+			}
+		case MatchTypeContent:
 			for _, content := range ctx.content {
+				lowerContent := strings.ToLower(content)
 				for _, id := range sig.Identifiers {
-					if strings.Contains(content, id) {
+					if strings.Contains(lowerContent, strings.ToLower(id)) {
 						matched = true
 						break
 					}
@@ -277,79 +297,80 @@ func identProject(root string, name string) Project {
 		}
 	}
 
-	// Post-process / refinement
 	refineProject(&p, ctx)
-
 	return p
 }
 
 func applySignature(p *Project, sig TechSignature) {
 	switch sig.Category {
 	case "Language":
-		if p.Language == "Unknown" {
+		if p.Language == "Unknown" || languagePriority(sig.Name) > languagePriority(p.Language) {
 			p.Language = sig.Name
-		} else if p.Language != sig.Name {
-			// Multi-language project strategy:
-			// Maybe prioritize some or list both?
-			// For simplicity, overwrite if "Unknown", otherwise keep or refined logic.
-			// Let's bias towards specific project markers.
-			// "Go Module" (File) > "Go" (Ext)
-			if sig.MatchType == MatchTypeFile {
-				p.Language = sig.Name
-			}
 		}
 	case "Framework":
-		if p.Stack == "Unknown" || p.Stack == "Node.js Project" || p.Stack == "Python Project" {
+		if p.Stack == "Unknown" || isGenericStack(p.Stack) {
 			p.Stack = sig.Name
-		} else {
-			// If we already have a stack, maybe append tag?
-			// e.g. "Next.js" found, but already "React" found.
-			// If sig is "Next.js", it overrides "React".
-			// Naive: Just tag it.
-			p.Tags = append(p.Tags, sig.Name)
+		} else if p.Stack != sig.Name {
+			if frameworkPriority(sig.Name) > frameworkPriority(p.Stack) {
+				p.Tags = append(p.Tags, p.Stack)
+				p.Stack = sig.Name
+			} else {
+				p.Tags = append(p.Tags, sig.Name)
+			}
 		}
 	case "Package Manager":
-		p.PackageManager = sig.Name
-	case "Library":
-		p.Tags = append(p.Tags, sig.Name)
-	case "Tool", "DevOps", "Cloud":
+		if p.PackageManager == "Unknown" || p.PackageManager == "" {
+			p.PackageManager = sig.Name
+		} else if p.PackageManager != sig.Name {
+			p.Tags = append(p.Tags, sig.Name)
+		}
+	case "Library", "Build Tool", "Tool", "DevOps", "Cloud":
 		p.Tags = append(p.Tags, sig.Name)
 	}
 
-	// Deduplicate tags
 	p.Tags = unique(p.Tags)
 }
 
 func refineProject(p *Project, ctx *projectContext) {
-	// 1. Language Fallbacks based on files
 	if p.Language == "Unknown" {
-		for _, f := range ctx.files {
-			if strings.HasSuffix(f, ".js") {
+		switch {
+		case hasFile(ctx, "go.mod"):
+			p.Language = "Go"
+		case hasFile(ctx, "Cargo.toml"):
+			p.Language = "Rust"
+		case hasAnyFile(ctx, "requirements.txt", "pyproject.toml", "Pipfile", "uv.lock"):
+			p.Language = "Python"
+		case hasFile(ctx, "package.json"):
+			if hasFile(ctx, "tsconfig.json") {
+				p.Language = "TypeScript"
+			} else {
 				p.Language = "JavaScript"
-				break
 			}
 		}
 	}
 
-	// 2. PackageManager Refinement
-	// If mise is present, wrap it
-	hasMise := false
-	for _, f := range ctx.files {
-		if f == "mise.toml" || f == ".mise.toml" {
-			hasMise = true
-			break
-		}
-	}
+	hasMise := hasAnyFile(ctx, "mise.toml", ".mise.toml")
 	if hasMise {
 		if p.PackageManager == "Unknown" || p.PackageManager == "" {
 			p.PackageManager = "mise"
 		} else {
 			p.PackageManager = "mise+" + p.PackageManager
 		}
+	} else if p.PackageManager == "Unknown" || p.PackageManager == "" {
+		switch {
+		case hasFile(ctx, "go.mod"):
+			p.PackageManager = "go mod"
+		case hasFile(ctx, "Cargo.toml"):
+			p.PackageManager = "cargo"
+		case hasFile(ctx, "requirements.txt"):
+			p.PackageManager = "pip"
+		case hasFile(ctx, "Pipfile"):
+			p.PackageManager = "pipenv"
+		case hasFile(ctx, "uv.lock"):
+			p.PackageManager = "uv"
+		}
 	}
 
-	// 3. Stack Refinement
-	// If we detected a framework like "Next.js", formatting standardizes it.
 	switch p.Stack {
 	case "Next.js":
 		p.Stack = "Next.js App"
@@ -357,11 +378,8 @@ func refineProject(p *Project, ctx *projectContext) {
 		p.Stack = "Tauri App"
 	}
 
-	// Fallback for JS projects without frameworks detected
-	if p.Language == "JavaScript" || p.Language == "TypeScript" {
-		if p.Stack == "Unknown" {
-			p.Stack = "Node.js Project"
-		}
+	if (p.Language == "JavaScript" || p.Language == "TypeScript") && p.Stack == "Unknown" {
+		p.Stack = "Node.js Project"
 	}
 }
 
@@ -375,4 +393,59 @@ func unique(slice []string) []string {
 		}
 	}
 	return list
+}
+
+func normalizeToken(s string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(s))
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.Trim(trimmed, "\"'")
+	return trimmed
+}
+
+func hasFile(ctx *projectContext, name string) bool {
+	for _, f := range ctx.files {
+		if strings.EqualFold(f, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyFile(ctx *projectContext, names ...string) bool {
+	for _, n := range names {
+		if hasFile(ctx, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGenericStack(stack string) bool {
+	return stack == "Node.js Project" || stack == "Python Project"
+}
+
+func languagePriority(lang string) int {
+	switch lang {
+	case "TypeScript":
+		return 4
+	case "JavaScript":
+		return 3
+	case "Go", "Rust", "Python", "Java", "Kotlin", "Ruby", "PHP", "C", "C++", "Shell", "Lua", "HTML", "CSS", "SASS/SCSS":
+		return 3
+	default:
+		return 1
+	}
+}
+
+func frameworkPriority(stack string) int {
+	switch stack {
+	case "React":
+		return 1
+	case "Node.js Project", "Python Project", "Unknown":
+		return 0
+	default:
+		return 3
+	}
 }

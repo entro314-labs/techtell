@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
+	"regexp"
 	"strings"
 )
 
@@ -17,6 +19,12 @@ var Parsers = map[string]ContentParser{
 	"Cargo.toml":       ParseCargoToml,
 	"build.gradle":     ParseGradle,
 	"build.gradle.kts": ParseGradle,
+	"pyproject.toml":   ParsePyProjectToml,
+	"Pipfile":          ParsePipfile,
+	"uv.lock":          ParseUVLock,
+	"Gemfile":          ParseGemfile,
+	"composer.json":    ParseComposerJSON,
+	"pom.xml":          ParsePomXML,
 }
 
 // ParsePackageJSON parses Node.js package.json
@@ -63,13 +71,11 @@ func ParseGoMod(content []byte) ([]string, error) {
 				continue
 			}
 			if len(parts) >= 2 {
-				// Single line require: require github.com/foo/bar v1.0.0
 				deps = append(deps, parts[1])
 			}
 		} else if parts[0] == ")" && inRequire {
 			inRequire = false
 		} else if inRequire {
-			// Inside require block: github.com/foo/bar v1.0.0
 			if len(parts) >= 1 {
 				deps = append(deps, parts[0])
 			}
@@ -88,9 +94,6 @@ func ParseRequirementsTxt(content []byte) ([]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Remove version specifiers (e.g., "flask==2.0.1" -> "flask")
-		// Also handle "flask>=2.0" or "flask~=2.0"
-		// Simple approach: split by typical version chars
 		splitters := []string{"==", ">=", "<=", "~=", "!=", ";", " "}
 		pkg := line
 		for _, s := range splitters {
@@ -111,10 +114,6 @@ func ParseCargoToml(content []byte) ([]string, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	inDependencies := false
 
-	// Very naive TOML parser for dependencies
-	// Looks for [dependencies] or [dev-dependencies] section
-	// Then reads keys until next section
-
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -132,7 +131,6 @@ func ParseCargoToml(content []byte) ([]string, error) {
 		}
 
 		if inDependencies {
-			// parse "name = ..." or "name = { ... }"
 			if idx := strings.Index(line, "="); idx != -1 {
 				name := strings.TrimSpace(line[:idx])
 				deps = append(deps, name)
@@ -147,11 +145,6 @@ func ParseGradle(content []byte) ([]string, error) {
 	var deps []string
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 
-	// Naive Gradle parser
-	// Looks for: implementation 'com.example:lib:1.0'
-	// or: api("com.example:lib:1.0")
-	// or: classpath "com.android.tools.build:gradle:7.0.0"
-
 	keywords := []string{"implementation", "api", "compileOnly", "runtimeOnly", "testImplementation", "classpath", "kapt", "annotationProcessor"}
 
 	for scanner.Scan() {
@@ -161,17 +154,171 @@ func ParseGradle(content []byte) ([]string, error) {
 		}
 
 		for _, kw := range keywords {
-			if strings.HasPrefix(line, kw) {
-				// Extract string content: '...' or "..."
-				start := strings.IndexAny(line, "'\"")
-				if start != -1 {
-					end := strings.LastIndexAny(line, "'\"")
-					if end > start {
-						depStr := line[start+1 : end]
-						deps = append(deps, depStr)
-					}
-				}
+			if !strings.HasPrefix(line, kw) {
+				continue
 			}
+			start := strings.IndexAny(line, "'\"")
+			if start == -1 {
+				continue
+			}
+			end := strings.LastIndexAny(line, "'\"")
+			if end <= start {
+				continue
+			}
+			depStr := line[start+1 : end]
+			deps = append(deps, depStr)
+			parts := strings.Split(depStr, ":")
+			if len(parts) >= 2 {
+				deps = append(deps, parts[1])
+			}
+		}
+	}
+	return deps, nil
+}
+
+// ParsePyProjectToml parses pyproject.toml dependency entries.
+func ParsePyProjectToml(content []byte) ([]string, error) {
+	var deps []string
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+
+	inDeps := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section := strings.Trim(line, "[]")
+			inDeps = section == "project.dependencies" ||
+				section == "project.optional-dependencies" ||
+				section == "tool.poetry.dependencies" ||
+				section == "tool.poetry.group.dev.dependencies" ||
+				section == "dependency-groups"
+			continue
+		}
+		if !inDeps {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx != -1 {
+			name := strings.TrimSpace(line[:idx])
+			name = strings.Trim(name, "\"'")
+			if name != "" && name != "python" {
+				deps = append(deps, name)
+			}
+			continue
+		}
+		line = strings.Trim(line, ",")
+		line = strings.Trim(line, "\"'")
+		if line == "" {
+			continue
+		}
+		splitters := []string{"==", ">=", "<=", "~=", "!=", ";", " "}
+		name := line
+		for _, s := range splitters {
+			if idx := strings.Index(name, s); idx != -1 {
+				name = name[:idx]
+			}
+		}
+		name = strings.TrimSpace(name)
+		if name != "" {
+			deps = append(deps, name)
+		}
+	}
+	return deps, nil
+}
+
+// ParsePipfile parses Pipfile package sections.
+func ParsePipfile(content []byte) ([]string, error) {
+	var deps []string
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	inDeps := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section := strings.Trim(line, "[]")
+			inDeps = section == "packages" || section == "dev-packages"
+			continue
+		}
+		if !inDeps {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx != -1 {
+			name := strings.TrimSpace(line[:idx])
+			name = strings.Trim(name, "\"'")
+			if name != "" {
+				deps = append(deps, name)
+			}
+		}
+	}
+	return deps, nil
+}
+
+// ParseUVLock parses uv.lock package entries.
+func ParseUVLock(content []byte) ([]string, error) {
+	var deps []string
+	re := regexp.MustCompile(`(?m)^name\s*=\s*["']([^"']+)["']`)
+	for _, match := range re.FindAllSubmatch(content, -1) {
+		if len(match) > 1 {
+			deps = append(deps, string(match[1]))
+		}
+	}
+	return deps, nil
+}
+
+// ParseGemfile parses gem declarations in Gemfile.
+func ParseGemfile(content []byte) ([]string, error) {
+	var deps []string
+	re := regexp.MustCompile(`(?m)^\s*gem\s+["']([^"']+)["']`)
+	for _, match := range re.FindAllSubmatch(content, -1) {
+		if len(match) > 1 {
+			deps = append(deps, string(match[1]))
+		}
+	}
+	return deps, nil
+}
+
+// ParseComposerJSON parses PHP composer.json dependencies.
+func ParseComposerJSON(content []byte) ([]string, error) {
+	var c struct {
+		Require    map[string]string `json:"require"`
+		RequireDev map[string]string `json:"require-dev"`
+	}
+	if err := json.Unmarshal(content, &c); err != nil {
+		return nil, err
+	}
+	deps := make([]string, 0, len(c.Require)+len(c.RequireDev))
+	for k := range c.Require {
+		deps = append(deps, k)
+	}
+	for k := range c.RequireDev {
+		deps = append(deps, k)
+	}
+	return deps, nil
+}
+
+// ParsePomXML parses Maven pom.xml dependency identifiers.
+func ParsePomXML(content []byte) ([]string, error) {
+	type dependency struct {
+		ArtifactID string `xml:"artifactId"`
+		GroupID    string `xml:"groupId"`
+	}
+	type pom struct {
+		Dependencies []dependency `xml:"dependencies>dependency"`
+	}
+	var p pom
+	if err := xml.Unmarshal(content, &p); err != nil {
+		return nil, err
+	}
+	deps := make([]string, 0, len(p.Dependencies)*2)
+	for _, d := range p.Dependencies {
+		if d.ArtifactID != "" {
+			deps = append(deps, d.ArtifactID)
+		}
+		if d.GroupID != "" {
+			deps = append(deps, d.GroupID)
 		}
 	}
 	return deps, nil

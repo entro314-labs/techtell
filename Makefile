@@ -207,6 +207,14 @@ release-snapshot:
 release:
 	goreleaser release --clean
 
+.PHONY: tag-release
+tag-release:
+	@if [ -z "$(BUMP)" ]; then \
+		echo "Usage: make tag-release BUMP=major|minor|patch [REMOTE=origin]"; \
+		exit 1; \
+	fi
+	@./scripts/tag-release.sh --bump $(BUMP) --remote $(or $(REMOTE),origin)
+
 # =============================================================================
 # Cleanup
 # =============================================================================
@@ -274,6 +282,7 @@ help:
 	@echo "  release-check    Validate GoReleaser config"
 	@echo "  release-snapshot Build snapshot release"
 	@echo "  release          Create release with GoReleaser"
+	@echo "  tag-release      Create and push semver git tag (BUMP=major|minor|patch)"
 	@echo ""
 	@echo "Other:"
 	@echo "  docker-build     Build Docker image"

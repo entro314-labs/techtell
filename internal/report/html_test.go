@@ -1,8 +1,8 @@
 package report
 
 import (
-	"strings"
 	"github.com/entro314-labs/techtell/internal/analysis"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +20,8 @@ func TestGenerateHTML_XSS(t *testing.T) {
 	}
 	r.LangCounts["JavaScript"] = 1
 	r.StackCounts["React"] = 1
+	r.PkgMgrCounts["npm"] = 1
+	r.Errors = append(r.Errors, "permission denied while scanning /tmp/foo")
 
 	// Generate HTML
 	htmlContent := GenerateHTML(r, "/tmp")
@@ -42,4 +44,12 @@ func TestGenerateHTML_XSS(t *testing.T) {
 	// Let's check generally that no raw <script> exists except maybe in the code block I just wrote
 	// But simply checking for the project name fragment being escaped is enough?
 	// The vector was in Radar Chart labels.
+
+	if !strings.Contains(htmlContent, "Project Inventory") {
+		t.Errorf("expected project inventory section to be present")
+	}
+
+	if !strings.Contains(htmlContent, "permission denied while scanning /tmp/foo") {
+		t.Errorf("expected warnings section to include scan warning")
+	}
 }

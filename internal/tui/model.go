@@ -41,6 +41,7 @@ type KeyMap struct {
 	Tab      key.Binding
 	Enter    key.Binding
 	Back     key.Binding
+	Restart  key.Binding
 	Save     key.Binding
 	SaveHTML key.Binding
 	Quit     key.Binding
@@ -59,6 +60,10 @@ var Keys = KeyMap{
 		key.WithKeys("esc", "backspace"),
 		key.WithHelp("esc", "back"),
 	),
+	Restart: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "restart"),
+	),
 	Save: key.NewBinding(
 		key.WithKeys("s"),
 		key.WithHelp("s", "save md"),
@@ -74,12 +79,12 @@ var Keys = KeyMap{
 }
 
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.Enter, k.Back, k.Save, k.SaveHTML, k.Quit}
+	return []key.Binding{k.Tab, k.Enter, k.Back, k.Restart, k.Save, k.SaveHTML, k.Quit}
 }
 
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Tab, k.Enter, k.Back},
+		{k.Tab, k.Enter, k.Back, k.Restart},
 		{k.Save, k.SaveHTML, k.Quit},
 	}
 }
@@ -113,8 +118,9 @@ type Model struct {
 }
 
 type discoveryResult struct {
-	paths []string
-	err   error
+	paths    []string
+	warnings []string
+	err      error
 }
 
 func InitialModel() Model {
@@ -201,6 +207,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					path = wd
 				}
+				if abs, err := filepath.Abs(path); err == nil {
+					path = abs
+				}
 				m.CurrentPath = path
 				m.State = StateScanning
 				m.scanCount = 0
@@ -215,6 +224,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// START DISCOVERY (and restart spinner loop)
 				return m, tea.Batch(startDiscovery(ctx, &m), m.Spinner.Tick)
+			}
+		case StateScanning:
+			switch {
+			case key.Matches(msg, Keys.Back):
+				if m.cancel != nil {
+					m.cancel()
+					m.cancel = nil
+				}
+				m.State = StateWelcome
+				m.Report = nil
+				m.LastScanned = ""
+				m.TextInput.Focus()
+				return m, nil
 			}
 		case StateResults:
 			switch {
@@ -258,6 +280,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ActiveTab == 1 {
 				m.Table, cmd = m.Table.Update(msg)
 				return m, cmd
+			}
+		case StateError:
+			switch {
+			case key.Matches(msg, Keys.Restart), key.Matches(msg, Keys.Back), key.Matches(msg, Keys.Enter):
+				if m.cancel != nil {
+					m.cancel()
+					m.cancel = nil
+				}
+				m.State = StateWelcome
+				m.Report = nil
+				m.Err = nil
+				m.SavedFile = ""
+				m.LastScanned = ""
+				m.TextInput.SetValue("")
+				m.TextInput.Focus()
+				return m, nil
 			}
 		}
 
@@ -329,12 +367,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		count := len(paths)
 		if count == 0 {
 			m.Report = analysis.NewWorkspaceReport()
+			m.Report.Errors = append(m.Report.Errors, res.warnings...)
 			m.State = StateResults
 			return m, nil
 		}
 
 		m.Report = analysis.NewWorkspaceReport()
 		m.Report.TotalProjects = count
+		m.Report.Errors = append(m.Report.Errors, res.warnings...)
 		m.pendingPaths = paths
 
 		// Start processing chain
@@ -432,7 +472,8 @@ func startDiscovery(ctx context.Context, m *Model) tea.Cmd {
 	go func() {
 		defer close(m.scanCh)
 		paths, err := m.analyzer.DiscoverProjects(ctx, m.scanCh)
-		m.scanDone <- discoveryResult{paths: paths, err: err}
+		warnings := append([]string(nil), m.analyzer.Warnings...)
+		m.scanDone <- discoveryResult{paths: paths, warnings: warnings, err: err}
 		close(m.scanDone)
 	}()
 

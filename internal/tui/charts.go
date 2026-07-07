@@ -14,12 +14,18 @@ func BarChart(data map[string]int, width int) string {
 		return lipgloss.NewStyle().Faint(true).Render("No category data available.")
 	}
 
-	keys := make([]string, 0, len(data))
-	maxVal := 0
+	displayData := make(map[string]int, len(data))
 	for k, v := range data {
-		if k == "" {
-			k = "Other"
+		name := k
+		if strings.TrimSpace(name) == "" {
+			name = "Other"
 		}
+		displayData[name] += v
+	}
+
+	keys := make([]string, 0, len(displayData))
+	maxVal := 0
+	for k, v := range displayData {
 		keys = append(keys, k)
 		if v > maxVal {
 			maxVal = v
@@ -27,7 +33,7 @@ func BarChart(data map[string]int, width int) string {
 	}
 
 	sort.Slice(keys, func(i, j int) bool {
-		return data[keys[i]] > data[keys[j]]
+		return displayData[keys[i]] > displayData[keys[j]]
 	})
 
 	// Limit to top 5 categories for space
@@ -52,10 +58,7 @@ func BarChart(data map[string]int, width int) string {
 	}
 
 	for i, k := range keys {
-		val := data[k]
-		if k == "" {
-			k = "Other"
-		} // Should be handled above loop but just in case of map access
+		val := displayData[k]
 
 		// Bar calculation
 		barWidth := 0

@@ -1,4 +1,4 @@
-# Release Workflow — techtell
+# Release Workflow - techtell
 # Triggers on version tags (v*.*.*) and creates GitHub releases
 # Includes Cosign signing and post-release verification
 
@@ -22,6 +22,8 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
+  CI_SCRIPTS_REPO: "idominikosgr/ci-scripts"
+  CI_SCRIPTS_VERSION: "v0.1.0"
 
 jobs:
   release:
@@ -30,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -78,7 +80,27 @@ jobs:
         uses: anchore/sbom-action/download-syft@v0.24.0
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.0
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Fetch shared CI scripts
+        shell: bash
+        run: |
+          mkdir -p .ci-bin
+          script_url="https://raw.githubusercontent.com/${CI_SCRIPTS_REPO}/${CI_SCRIPTS_VERSION}/release/setup-gpg-ci.sh"
+
+          if curl -fsSL "$script_url" -o .ci-bin/setup-gpg-ci.sh; then
+            echo "Using shared ci-scripts: ${CI_SCRIPTS_REPO}@${CI_SCRIPTS_VERSION}"
+          else
+            echo "Shared script unavailable, using repository-local fallback"
+            cp ./scripts/release/setup-gpg-ci.sh .ci-bin/setup-gpg-ci.sh
+          fi
+
+      - name: Prepare GPG signing in CI
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
+        run: bash ./.ci-bin/setup-gpg-ci.sh
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7

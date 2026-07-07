@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,14 +35,24 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 
 	sb.WriteString("### Languages\n")
 	sb.WriteString("| Language | Projects |\n|---|---|\n")
-	for k, v := range r.LangCounts {
+	for _, k := range sortedKeys(r.LangCounts) {
+		v := r.LangCounts[k]
 		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
 	}
 	sb.WriteString("\n")
 
 	sb.WriteString("### Stacks\n")
 	sb.WriteString("| Stack | Projects |\n|---|---|\n")
-	for k, v := range r.StackCounts {
+	for _, k := range sortedKeys(r.StackCounts) {
+		v := r.StackCounts[k]
+		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("### Package Managers\n")
+	sb.WriteString("| Package Manager | Projects |\n|---|---|\n")
+	for _, k := range sortedKeys(r.PkgMgrCounts) {
+		v := r.PkgMgrCounts[k]
 		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
 	}
 	sb.WriteString("\n")
@@ -59,6 +70,13 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 
 		tags := strings.Join(p.Tags, ", ")
 		fmt.Fprintf(&sb, "| **%s** | %s | %s | %s | `%s` |\n", p.Name, p.Stack, p.Language, tags, cleanPath)
+	}
+
+	if len(r.Errors) > 0 {
+		sb.WriteString("\n## ⚠️ Warnings\n\n")
+		for _, w := range r.Errors {
+			fmt.Fprintf(&sb, "- %s\n", w)
+		}
 	}
 
 	return sb.String()
@@ -79,4 +97,13 @@ func getTop(m map[string]int) (string, int) {
 		}
 	}
 	return topK, maxV
+}
+
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
