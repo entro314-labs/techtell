@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/entro314-labs/techtell/internal/tui"
 
@@ -33,40 +32,58 @@ func buildVersion() string {
 	return fmt.Sprintf("%s (commit: %s, built: %s, by: %s)", version, commit, date, builtBy)
 }
 
-func parseCLIAction(args []string) cliAction {
-	if slices.Contains(args, "--version") || slices.Contains(args, "-v") {
-		return actionVersion
+func parseCLIAction(args []string) (cliAction, error) {
+	if len(args) == 0 {
+		return actionRun, nil
 	}
-	if slices.Contains(args, "--help") || slices.Contains(args, "-h") || slices.Contains(args, "-help") {
-		return actionHelp
+	if len(args) > 1 {
+		return actionRun, fmt.Errorf("expected at most one argument, got %d", len(args))
 	}
-	return actionRun
+	switch args[0] {
+	case "--version", "-v":
+		return actionVersion, nil
+	case "--help", "-h", "-help":
+		return actionHelp, nil
+	default:
+		return actionRun, fmt.Errorf("unknown argument %q", args[0])
+	}
 }
 
-func printHelp(w io.Writer) {
-	fmt.Fprintln(w, "techtell - workspace tech DNA analyzer")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  techtell           Start interactive TUI")
-	fmt.Fprintln(w, "  techtell --version Show version")
-	fmt.Fprintln(w, "  techtell --help    Show help")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "In the TUI:")
-	fmt.Fprintln(w, "  Enter              Start scan")
-	fmt.Fprintln(w, "  Tab/Shift+Tab      Switch result views")
-	fmt.Fprintln(w, "  s                  Save Markdown report")
-	fmt.Fprintln(w, "  h                  Save HTML report")
-	fmt.Fprintln(w, "  Esc/Backspace      Back/Cancel")
-	fmt.Fprintln(w, "  q or Ctrl+C        Quit")
+func printHelp(w io.Writer) error {
+	_, err := fmt.Fprint(w, `techtell - workspace tech DNA analyzer
+
+Usage:
+  techtell           Start interactive TUI
+  techtell --version Show version
+  techtell --help    Show help
+
+In the TUI:
+  Enter              Start scan
+  Tab/Shift+Tab      Switch result views
+  s                  Save Markdown report
+  h                  Save HTML report
+  Esc/Backspace      Back/Cancel
+  q or Ctrl+C        Quit
+`)
+	return err
 }
 
 func main() {
-	switch parseCLIAction(os.Args[1:]) {
+	action, err := parseCLIAction(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(2)
+	}
+
+	switch action {
 	case actionVersion:
 		fmt.Printf("techtell %s\n", buildVersion())
 		return
 	case actionHelp:
-		printHelp(os.Stdout)
+		if err := printHelp(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing help: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	case actionRun:
 	}

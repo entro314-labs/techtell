@@ -48,7 +48,8 @@ Please include the following information in your report:
 ## Security Features
 
 ### Supply Chain Security
-- All releases are signed with Cosign
+- Release checksums are signed with GPG
+- Published container images are signed with keyless Cosign
 - Published with SHA256 checksums for verification
 - SBOM (Software Bill of Materials) attached to every release
 - Dependencies monitored via `govulncheck` in CI
@@ -59,8 +60,14 @@ Please include the following information in your report:
 # Verify checksums
 sha256sum -c checksums.txt
 
-# Verify Cosign signatures (when cosign is configured)
-cosign verify-blob --signature checksums.txt.sig checksums.txt
+# Import the published key only after comparing its fingerprint with a trusted source
+gpg --import .release-public-key.asc
+gpg --verify checksums.txt.sig checksums.txt
+
+# Verify a container image signed by the release workflow
+cosign verify ghcr.io/entro314-labs/techtell:<version> \
+  --certificate-identity-regexp '^https://github.com/entro314-labs/techtell/.github/workflows/release\.yml@refs/(tags/v[0-9].*|heads/main)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ## Dependencies

@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -55,19 +56,6 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		"#c084fc", // Purple
 	}
 
-	// Helper to get top item
-	getTop := func(m map[string]int) string {
-		topK := "N/A"
-		maxV := 0
-		for k, v := range m {
-			if v > maxV {
-				maxV = v
-				topK = k
-			}
-		}
-		return topK
-	}
-
 	// Sort and prepare languages
 	langItems := make([]ChartItem, 0, len(r.LangCounts))
 	totalLang := 0
@@ -89,10 +77,18 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		})
 	}
 	sort.Slice(langItems, func(i, j int) bool {
+		if langItems[i].Count == langItems[j].Count {
+			return langItems[i].Name < langItems[j].Name
+		}
 		return langItems[i].Count > langItems[j].Count
 	})
 	if len(langItems) > 8 {
-		langItems = langItems[:8]
+		other := ChartItem{Name: "Other"}
+		for _, item := range langItems[7:] {
+			other.Count += item.Count
+			other.Percent += item.Percent
+		}
+		langItems = append(langItems[:7], other)
 	}
 	for i := range langItems {
 		langItems[i].Color = colors[i%len(colors)]
@@ -121,6 +117,9 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		})
 	}
 	sort.Slice(stackItems, func(i, j int) bool {
+		if stackItems[i].Count == stackItems[j].Count {
+			return stackItems[i].Name < stackItems[j].Name
+		}
 		return stackItems[i].Count > stackItems[j].Count
 	})
 	if len(stackItems) > 10 {
@@ -153,6 +152,9 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 		})
 	}
 	sort.Slice(pkgItems, func(i, j int) bool {
+		if pkgItems[i].Count == pkgItems[j].Count {
+			return pkgItems[i].Name < pkgItems[j].Name
+		}
 		return pkgItems[i].Count > pkgItems[j].Count
 	})
 	if len(pkgItems) > 6 {
@@ -171,14 +173,26 @@ func GenerateHTML(r *analysis.WorkspaceReport, rootPath string) string {
 	// Generate stacked horizontal bars
 	stackedBars := generateStackedBars(langItems, stackItems)
 
+	projects := make([]analysis.Project, len(r.Projects))
+	copy(projects, r.Projects)
+	for i := range projects {
+		relPath, err := filepath.Rel(rootPath, projects[i].Path)
+		if err == nil {
+			if relPath == "" {
+				relPath = "."
+			}
+			projects[i].Path = filepath.ToSlash(relPath)
+		}
+	}
+
 	data := ReportData{
-		RootPath:        rootPath,
+		RootPath:        displayRoot(rootPath),
 		Date:            time.Now().Format("2006-01-02 15:04"),
 		TotalProjects:   r.TotalProjects,
-		TopLanguage:     getTop(r.LangCounts),
-		TopStack:        getTop(r.StackCounts),
-		TopPkgMgr:       getTop(r.PkgMgrCounts),
-		Projects:        r.Projects,
+		TopLanguage:     getTopName(r.LangCounts),
+		TopStack:        getTopName(r.StackCounts),
+		TopPkgMgr:       getTopName(r.PkgMgrCounts),
+		Projects:        projects,
 		Warnings:        r.Errors,
 		Languages:       langItems,
 		Stacks:          stackItems,
@@ -202,6 +216,13 @@ func generatePieChart(items []ChartItem, cx, cy, r float64) string {
 	startAngle := -90.0
 
 	for _, item := range items {
+		if item.Percent >= 99.999 {
+			fmt.Fprintf(&sb,
+				`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" stroke="#0a0a0f" stroke-width="2"/>`,
+				cx, cy, r, item.Color,
+			)
+			continue
+		}
 		angle := item.Percent / 100 * 360
 		endAngle := startAngle + angle
 
@@ -227,6 +248,18 @@ func generatePieChart(items []ChartItem, cx, cy, r float64) string {
 	}
 
 	return sb.String()
+}
+
+func getTopName(values map[string]int) string {
+	topName := "N/A"
+	topCount := 0
+	for name, count := range values {
+		if count > topCount || (count == topCount && count > 0 && (topName == "N/A" || name < topName)) {
+			topName = name
+			topCount = count
+		}
+	}
+	return topName
 }
 
 func generateRadarChart(items []ChartItem, cx, cy, maxR float64) string {

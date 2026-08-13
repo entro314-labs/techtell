@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -125,22 +126,9 @@ func (m Model) viewResults() string {
 			),
 		)
 
-		// Find top stats helper
-		getTop := func(m map[string]int) (string, int) {
-			topK := "N/A"
-			maxV := 0
-			for k, v := range m {
-				if v > maxV {
-					maxV = v
-					topK = k
-				}
-			}
-			return topK, maxV
-		}
-
-		topLang, _ := getTop(m.Report.LangCounts)
-		topStack, _ := getTop(m.Report.StackCounts)
-		topPM, _ := getTop(m.Report.PkgMgrCounts)
+		topLang, _ := topCategory(m.Report.LangCounts)
+		topStack, _ := topCategory(m.Report.StackCounts)
+		topPM, _ := topCategory(m.Report.PkgMgrCounts)
 
 		primaryLang := StyleStatBox.Render(
 			lipgloss.JoinVertical(lipgloss.Center,
@@ -206,13 +194,14 @@ func (m Model) viewResults() string {
 	helpView := m.Help.View(Keys)
 
 	// Notifications
-	var notify string
+	var notifications []string
 	if len(m.Report.Errors) > 0 {
-		notify = StyleError.Render(fmt.Sprintf("\n%d errors encountered.", len(m.Report.Errors)))
+		notifications = append(notifications, StyleError.Render(fmt.Sprintf("%d warnings encountered.", len(m.Report.Errors))))
 	}
 	if m.SavedFile != "" {
-		notify = StyleSuccess.Render(fmt.Sprintf("\nReport saved to: %s", m.SavedFile))
+		notifications = append(notifications, StyleSuccess.Render(fmt.Sprintf("Report saved to: %s", m.SavedFile)))
 	}
+	notify := strings.Join(notifications, "\n")
 
 	// Assemble
 	final := lipgloss.JoinVertical(lipgloss.Center,

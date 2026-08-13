@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 	var sb strings.Builder
 
 	sb.WriteString("# TechTell Workspace Report\n\n")
-	fmt.Fprintf(&sb, "**Scanned Root:** `%s`\n", rootPath)
+	fmt.Fprintf(&sb, "**Scanned Root:** `%s`\n", escapeMarkdown(displayRoot(rootPath)))
 	fmt.Fprintf(&sb, "**Date:** %s\n\n", time.Now().Format(time.RFC1123))
 
 	// 1. Summary Stats
@@ -23,10 +24,10 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 	fmt.Fprintf(&sb, "- **Total Projects Identified:** %d\n", r.TotalProjects)
 
 	topLang, langC := getTop(r.LangCounts)
-	fmt.Fprintf(&sb, "- **Dominant Language:** %s (%d projects)\n", topLang, langC)
+	fmt.Fprintf(&sb, "- **Dominant Language:** %s (%d projects)\n", escapeMarkdown(topLang), langC)
 
 	topStack, stackC := getTop(r.StackCounts)
-	fmt.Fprintf(&sb, "- **Top Stack:** %s (%d projects)\n", topStack, stackC)
+	fmt.Fprintf(&sb, "- **Top Stack:** %s (%d projects)\n", escapeMarkdown(topStack), stackC)
 
 	sb.WriteString("\n---\n\n")
 
@@ -37,7 +38,7 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 	sb.WriteString("| Language | Projects |\n|---|---|\n")
 	for _, k := range sortedKeys(r.LangCounts) {
 		v := r.LangCounts[k]
-		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
+		fmt.Fprintf(&sb, "| %s | %d |\n", escapeMarkdown(k), v)
 	}
 	sb.WriteString("\n")
 
@@ -45,7 +46,7 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 	sb.WriteString("| Stack | Projects |\n|---|---|\n")
 	for _, k := range sortedKeys(r.StackCounts) {
 		v := r.StackCounts[k]
-		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
+		fmt.Fprintf(&sb, "| %s | %d |\n", escapeMarkdown(k), v)
 	}
 	sb.WriteString("\n")
 
@@ -53,29 +54,33 @@ func GenerateMarkdown(r *analysis.WorkspaceReport, rootPath string) string {
 	sb.WriteString("| Package Manager | Projects |\n|---|---|\n")
 	for _, k := range sortedKeys(r.PkgMgrCounts) {
 		v := r.PkgMgrCounts[k]
-		fmt.Fprintf(&sb, "| %s | %d |\n", k, v)
+		fmt.Fprintf(&sb, "| %s | %d |\n", escapeMarkdown(k), v)
 	}
 	sb.WriteString("\n")
 
 	sb.WriteString("## 📂 Project Inventory\n\n")
-	sb.WriteString("| Project Name | Stack | Language | Tags | Location |\n")
-	sb.WriteString("|---|---|---|---|---|\n")
+	sb.WriteString("| Project Name | Stack | Language | Package Manager | Tags | Location |\n")
+	sb.WriteString("|---|---|---|---|---|---|\n")
 
 	for _, p := range r.Projects {
-		cleanPath := strings.Replace(p.Path, rootPath, "", 1)
-		cleanPath = strings.TrimPrefix(cleanPath, "/")
-		if cleanPath == "" {
+		cleanPath, err := filepath.Rel(rootPath, p.Path)
+		if err != nil {
+			cleanPath = p.Path
+		}
+		if cleanPath == "" || cleanPath == "." {
 			cleanPath = "."
 		}
+		cleanPath = filepath.ToSlash(cleanPath)
 
 		tags := strings.Join(p.Tags, ", ")
-		fmt.Fprintf(&sb, "| **%s** | %s | %s | %s | `%s` |\n", p.Name, p.Stack, p.Language, tags, cleanPath)
+		fmt.Fprintf(&sb, "| **%s** | %s | %s | %s | %s | `%s` |\n",
+			escapeMarkdown(p.Name), escapeMarkdown(p.Stack), escapeMarkdown(p.Language), escapeMarkdown(p.PackageManager), escapeMarkdown(tags), escapeMarkdown(cleanPath))
 	}
 
 	if len(r.Errors) > 0 {
 		sb.WriteString("\n## ⚠️ Warnings\n\n")
 		for _, w := range r.Errors {
-			fmt.Fprintf(&sb, "- %s\n", w)
+			fmt.Fprintf(&sb, "- %s\n", escapeMarkdown(w))
 		}
 	}
 
@@ -91,12 +96,33 @@ func getTop(m map[string]int) (string, int) {
 	topK := "N/A"
 	maxV := 0
 	for k, v := range m {
-		if v > maxV {
+		if v > maxV || (v == maxV && v > 0 && (topK == "N/A" || k < topK)) {
 			maxV = v
 			topK = k
 		}
 	}
 	return topK, maxV
+}
+
+func escapeMarkdown(value string) string {
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"\r", " ",
+		"\n", " ",
+		"|", "\\|",
+		"`", "\\`",
+		"*", "\\*",
+		"_", "\\_",
+	).Replace(value)
+}
+
+func displayRoot(rootPath string) string {
+	cleaned := filepath.Clean(rootPath)
+	name := filepath.Base(cleaned)
+	if name == "." || name == string(filepath.Separator) {
+		return cleaned
+	}
+	return name
 }
 
 func sortedKeys(m map[string]int) []string {

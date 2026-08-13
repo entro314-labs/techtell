@@ -7,6 +7,8 @@ import (
 	"encoding/xml"
 	"regexp"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // ContentParser parses file content and returns a list of dependencies
@@ -21,7 +23,6 @@ var Parsers = map[string]ContentParser{
 	"build.gradle.kts": ParseGradle,
 	"pyproject.toml":   ParsePyProjectToml,
 	"Pipfile":          ParsePipfile,
-	"uv.lock":          ParseUVLock,
 	"Gemfile":          ParseGemfile,
 	"composer.json":    ParseComposerJSON,
 	"pom.xml":          ParsePomXML,
@@ -70,18 +71,18 @@ func ParseGoMod(content []byte) ([]string, error) {
 				inRequire = true
 				continue
 			}
-			if len(parts) >= 2 {
+			if len(parts) >= 2 && !strings.Contains(line, "// indirect") {
 				deps = append(deps, parts[1])
 			}
 		} else if parts[0] == ")" && inRequire {
 			inRequire = false
-		} else if inRequire {
+		} else if inRequire && !strings.Contains(line, "// indirect") {
 			if len(parts) >= 1 {
 				deps = append(deps, parts[0])
 			}
 		}
 	}
-	return deps, nil
+	return deps, scanner.Err()
 }
 
 // ParseRequirementsTxt parses Python requirements.txt
@@ -94,18 +95,12 @@ func ParseRequirementsTxt(content []byte) ([]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		splitters := []string{"==", ">=", "<=", "~=", "!=", ";", " "}
-		pkg := line
-		for _, s := range splitters {
-			if idx := strings.Index(pkg, s); idx != -1 {
-				pkg = pkg[:idx]
-			}
-		}
+		pkg := parsePythonRequirementName(line)
 		if pkg != "" {
 			deps = append(deps, pkg)
 		}
 	}
-	return deps, nil
+	return deps, scanner.Err()
 }
 
 // ParseCargoToml parses Rust Cargo.toml
@@ -137,7 +132,7 @@ func ParseCargoToml(content []byte) ([]string, error) {
 			}
 		}
 	}
-	return deps, nil
+	return deps, scanner.Err()
 }
 
 // ParseGradle parses build.gradle and build.gradle.kts
@@ -157,74 +152,65 @@ func ParseGradle(content []byte) ([]string, error) {
 			if !strings.HasPrefix(line, kw) {
 				continue
 			}
-			start := strings.IndexAny(line, "'\"")
-			if start == -1 {
+			depStr, ok := firstQuotedValue(line)
+			if !ok {
 				continue
 			}
-			end := strings.LastIndexAny(line, "'\"")
-			if end <= start {
-				continue
-			}
-			depStr := line[start+1 : end]
 			deps = append(deps, depStr)
 			parts := strings.Split(depStr, ":")
 			if len(parts) >= 2 {
+				deps = append(deps, parts[0])
 				deps = append(deps, parts[1])
 			}
 		}
+
+		if strings.HasPrefix(line, "id(") || strings.HasPrefix(line, "id ") {
+			if pluginID, ok := firstQuotedValue(line); ok {
+				deps = append(deps, pluginID)
+			}
+		}
 	}
-	return deps, nil
+	return deps, scanner.Err()
+}
+
+func firstQuotedValue(line string) (string, bool) {
+	start := strings.IndexAny(line, "'\"")
+	if start < 0 {
+		return "", false
+	}
+	quote := line[start]
+	remainder := line[start+1:]
+	end := strings.IndexByte(remainder, quote)
+	if end < 0 {
+		return "", false
+	}
+	return remainder[:end], true
 }
 
 // ParsePyProjectToml parses pyproject.toml dependency entries.
 func ParsePyProjectToml(content []byte) ([]string, error) {
-	var deps []string
-	scanner := bufio.NewScanner(bytes.NewReader(content))
+	var document map[string]any
+	if err := toml.Unmarshal(content, &document); err != nil {
+		return nil, err
+	}
 
-	inDeps := false
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section := strings.Trim(line, "[]")
-			inDeps = section == "project.dependencies" ||
-				section == "project.optional-dependencies" ||
-				section == "tool.poetry.dependencies" ||
-				section == "tool.poetry.group.dev.dependencies" ||
-				section == "dependency-groups"
-			continue
-		}
-		if !inDeps {
-			continue
-		}
-		if idx := strings.Index(line, "="); idx != -1 {
-			name := strings.TrimSpace(line[:idx])
-			name = strings.Trim(name, "\"'")
-			if name != "" && name != "python" {
-				deps = append(deps, name)
+	deps := make([]string, 0)
+	project := nestedMap(document, "project")
+	appendRequirementList(&deps, project["dependencies"])
+	appendRequirementGroups(&deps, project["optional-dependencies"])
+	appendRequirementGroups(&deps, document["dependency-groups"])
+
+	poetry := nestedMap(document, "tool", "poetry")
+	appendDependencyKeys(&deps, poetry["dependencies"])
+	if groups, ok := poetry["group"].(map[string]any); ok {
+		for _, value := range groups {
+			if group, ok := value.(map[string]any); ok {
+				appendDependencyKeys(&deps, group["dependencies"])
 			}
-			continue
-		}
-		line = strings.Trim(line, ",")
-		line = strings.Trim(line, "\"'")
-		if line == "" {
-			continue
-		}
-		splitters := []string{"==", ">=", "<=", "~=", "!=", ";", " "}
-		name := line
-		for _, s := range splitters {
-			if idx := strings.Index(name, s); idx != -1 {
-				name = name[:idx]
-			}
-		}
-		name = strings.TrimSpace(name)
-		if name != "" {
-			deps = append(deps, name)
 		}
 	}
-	return deps, nil
+
+	return uniqueStrings(deps), nil
 }
 
 // ParsePipfile parses Pipfile package sections.
@@ -253,7 +239,82 @@ func ParsePipfile(content []byte) ([]string, error) {
 			}
 		}
 	}
-	return deps, nil
+	return deps, scanner.Err()
+}
+
+func parsePythonRequirementName(spec string) string {
+	name := strings.TrimSpace(spec)
+	if name == "" || strings.HasPrefix(name, "-") {
+		return ""
+	}
+	for _, delimiter := range []string{";", " @ ", "@", "[", "~=", "==", "!=", ">=", "<=", ">", "<", " "} {
+		if idx := strings.Index(name, delimiter); idx >= 0 {
+			name = name[:idx]
+		}
+	}
+	return strings.TrimSpace(strings.Trim(name, "\"'"))
+}
+
+func nestedMap(root map[string]any, path ...string) map[string]any {
+	current := root
+	for _, part := range path {
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			return map[string]any{}
+		}
+		current = next
+	}
+	return current
+}
+
+func appendRequirementList(deps *[]string, value any) {
+	values, ok := value.([]any)
+	if !ok {
+		return
+	}
+	for _, item := range values {
+		if spec, ok := item.(string); ok {
+			if name := parsePythonRequirementName(spec); name != "" {
+				*deps = append(*deps, name)
+			}
+		}
+	}
+}
+
+func appendRequirementGroups(deps *[]string, value any) {
+	groups, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, group := range groups {
+		appendRequirementList(deps, group)
+	}
+}
+
+func appendDependencyKeys(deps *[]string, value any) {
+	dependencies, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	for name := range dependencies {
+		if name != "python" {
+			*deps = append(*deps, name)
+		}
+	}
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // ParseUVLock parses uv.lock package entries.

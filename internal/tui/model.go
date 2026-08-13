@@ -32,9 +32,19 @@ const (
 )
 
 type errMsg error
-type rootsFoundMsg discoveryResult
-type scanUpdateMsg string
-type projectAnalyzedMsg analysis.Project
+type rootsFoundMsg struct {
+	scanID uint64
+	result discoveryResult
+}
+type scanUpdateMsg struct {
+	scanID uint64
+	path   string
+}
+type projectAnalyzedMsg struct {
+	scanID   uint64
+	project  analysis.Project
+	warnings []string
+}
 
 // KeyMap defines keybindings
 type KeyMap struct {
@@ -110,6 +120,7 @@ type Model struct {
 	scanCh       chan string
 	scanDone     chan discoveryResult
 	scanCount    int
+	scanID       uint64
 
 	analyzer *analysis.Analyzer
 	cancel   context.CancelFunc
@@ -134,7 +145,7 @@ func InitialModel() Model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter path to scan (default: current directory)"
 	ti.Focus()
-	ti.CharLimit = 156
+	ti.CharLimit = 4096
 	ti.Width = 40
 
 	// Initialize Table
@@ -142,6 +153,7 @@ func InitialModel() Model {
 		{Title: "Project Name", Width: 25},
 		{Title: "Stack", Width: 20},
 		{Title: "Language", Width: 10},
+		{Title: "Package Manager", Width: 15},
 		{Title: "Tags", Width: 25},
 		{Title: "Path", Width: 25},
 	}
@@ -212,7 +224,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.CurrentPath = path
 				m.State = StateScanning
+				m.ActiveTab = 0
+				m.scanID++
 				m.scanCount = 0
+				m.Report = nil
+				m.Err = nil
+				m.SavedFile = ""
+				m.LastScanned = ""
+				m.pendingPaths = nil
+				m.Table.SetRows(nil)
 				if m.Progress.Width == 0 {
 					m.Progress.Width = 60
 				}
@@ -223,7 +243,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancel = cancel
 
 				// START DISCOVERY (and restart spinner loop)
-				return m, tea.Batch(startDiscovery(ctx, &m), m.Spinner.Tick)
+				return m, tea.Batch(startDiscovery(ctx, &m, m.scanID), m.Spinner.Tick)
 			}
 		case StateScanning:
 			switch {
@@ -232,8 +252,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancel()
 					m.cancel = nil
 				}
+				m.scanID++
 				m.State = StateWelcome
 				m.Report = nil
+				m.pendingPaths = nil
+				m.Table.SetRows(nil)
 				m.LastScanned = ""
 				m.TextInput.Focus()
 				return m, nil
@@ -265,9 +288,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancel()
 					m.cancel = nil
 				}
+				m.scanID++
 				m.State = StateWelcome
 				m.Report = nil
+				m.pendingPaths = nil
 				m.SavedFile = ""
+				m.Table.SetRows(nil)
 				m.TextInput.SetValue("")
 				m.TextInput.Focus()
 				return m, nil
@@ -288,11 +314,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancel()
 					m.cancel = nil
 				}
+				m.scanID++
 				m.State = StateWelcome
 				m.Report = nil
+				m.pendingPaths = nil
 				m.Err = nil
 				m.SavedFile = ""
 				m.LastScanned = ""
+				m.Table.SetRows(nil)
 				m.TextInput.SetValue("")
 				m.TextInput.Focus()
 				return m, nil
@@ -303,6 +332,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.Progress.Width = msg.Width - 10
+		if m.Progress.Width < 1 {
+			m.Progress.Width = 1
+		}
 
 		// Resize Table dynamically to fit
 		// Title(3) + Tab(2) + Help(2) + CardBorder(2) = 9 lines fixed overhead
@@ -313,7 +345,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tblHeight = 5
 		}
 
-		m.Table.SetWidth(m.width - 4)
+		tableWidth := m.width - 4
+		if tableWidth < 1 {
+			tableWidth = 1
+		}
+		m.Table.SetWidth(tableWidth)
 		m.Table.SetHeight(tblHeight)
 
 		// Dynamic column width
@@ -322,19 +358,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			availableWidth = 80
 		}
 
-		// Fixed cols: Stack(15), Lang(10), Tags(20) = 45
+		// Fixed cols: Stack(15), Lang(10), Package Manager(12), Tags(20) = 57
 		// Remainder split between Name (40%) and Path (60%)
-		rem := availableWidth - 45
+		rem := availableWidth - 57
 		nameCol := int(float64(rem) * 0.4)
 		pathCol := int(float64(rem) * 0.6)
 
 		cols := m.Table.Columns()
-		if len(cols) == 5 {
+		if len(cols) == 6 {
 			cols[0].Width = nameCol // Name
 			cols[1].Width = 15      // Stack
 			cols[2].Width = 10      // Lang
-			cols[3].Width = 20      // Tags
-			cols[4].Width = pathCol // Path
+			cols[3].Width = 12      // Package Manager
+			cols[4].Width = 20      // Tags
+			cols[5].Width = pathCol // Path
 			m.Table.SetColumns(cols)
 		}
 
@@ -349,17 +386,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Progress Flow ---
 	case scanUpdateMsg:
-		m.LastScanned = string(msg)
+		if msg.scanID != m.scanID || m.State != StateScanning {
+			return m, nil
+		}
+		m.LastScanned = msg.path
 		m.scanCount++
 
 		// Keep listening
-		return m, listenForActivity(m.scanCh, m.scanDone)
+		return m, listenForActivity(msg.scanID, m.scanCh, m.scanDone)
 
 	case rootsFoundMsg:
-		res := discoveryResult(msg)
+		if msg.scanID != m.scanID || m.State != StateScanning {
+			return m, nil
+		}
+		res := msg.result
 		if res.err != nil {
 			m.Err = res.err
 			m.State = StateError
+			m.cancel = nil
 			return m, nil
 		}
 
@@ -369,6 +413,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Report = analysis.NewWorkspaceReport()
 			m.Report.Errors = append(m.Report.Errors, res.warnings...)
 			m.State = StateResults
+			m.cancel = nil
+			m.Table.SetRows(nil)
 			return m, nil
 		}
 
@@ -378,12 +424,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPaths = paths
 
 		// Start processing chain
-		return m, processNextProject(m.analyzer, m.pendingPaths)
+		return m, processNextProject(msg.scanID, m.analyzer, m.pendingPaths)
 
 	case projectAnalyzedMsg:
-		p := analysis.Project(msg)
+		if msg.scanID != m.scanID || m.State != StateScanning || m.Report == nil {
+			return m, nil
+		}
+		p := msg.project
 		// Add to report
 		m.Report.Projects = append(m.Report.Projects, p)
+		m.Report.Errors = append(m.Report.Errors, msg.warnings...)
 		m.Report.StackCounts[p.Stack]++
 		m.Report.LangCounts[p.Language]++
 		m.Report.PkgMgrCounts[p.PackageManager]++
@@ -403,12 +453,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Continue?
 		if len(m.pendingPaths) > 0 {
-			return m, tea.Batch(cmd, inspectProjectCmd(m.analyzer, m.pendingPaths[0]))
+			return m, tea.Batch(cmd, inspectProjectCmd(msg.scanID, m.analyzer, m.pendingPaths[0]))
 		}
 
 		// Done
-		sort.Slice(m.Report.Projects, func(i, j int) bool { return m.Report.Projects[i].Name < m.Report.Projects[j].Name })
+		sort.Slice(m.Report.Projects, func(i, j int) bool {
+			if m.Report.Projects[i].Name == m.Report.Projects[j].Name {
+				return m.Report.Projects[i].Path < m.Report.Projects[j].Path
+			}
+			return m.Report.Projects[i].Name < m.Report.Projects[j].Name
+		})
 		m.State = StateResults
+		m.cancel = nil
 
 		// Populate Table
 		var rows []table.Row
@@ -418,7 +474,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				relPath = "/"
 			}
 			tags := strings.Join(p.Tags, ", ")
-			rows = append(rows, table.Row{p.Name, p.Stack, p.Language, tags, relPath})
+			rows = append(rows, table.Row{p.Name, p.Stack, p.Language, p.PackageManager, tags, relPath})
 		}
 		m.Table.SetRows(rows)
 
@@ -465,7 +521,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // Helper to start discovery and return the first listener cmd
-func startDiscovery(ctx context.Context, m *Model) tea.Cmd {
+func startDiscovery(ctx context.Context, m *Model, scanID uint64) tea.Cmd {
 	m.scanCh = make(chan string)
 	m.scanDone = make(chan discoveryResult, 1)
 
@@ -477,37 +533,37 @@ func startDiscovery(ctx context.Context, m *Model) tea.Cmd {
 		close(m.scanDone)
 	}()
 
-	return listenForActivity(m.scanCh, m.scanDone)
+	return listenForActivity(scanID, m.scanCh, m.scanDone)
 }
 
-func listenForActivity(ch <-chan string, done <-chan discoveryResult) tea.Cmd {
+func listenForActivity(scanID uint64, ch <-chan string, done <-chan discoveryResult) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case path, ok := <-ch:
 			if !ok {
 				// Channel closed. Wait for done.
 				res := <-done
-				return rootsFoundMsg(res)
+				return rootsFoundMsg{scanID: scanID, result: res}
 			}
-			return scanUpdateMsg(path)
+			return scanUpdateMsg{scanID: scanID, path: path}
 		case res := <-done:
-			return rootsFoundMsg(res)
+			return rootsFoundMsg{scanID: scanID, result: res}
 		}
 	}
 }
 
-func inspectProjectCmd(a *analysis.Analyzer, path string) tea.Cmd {
+func inspectProjectCmd(scanID uint64, a *analysis.Analyzer, path string) tea.Cmd {
 	return func() tea.Msg {
-		p := a.InspectProject(path)
-		return projectAnalyzedMsg(p)
+		p, warnings := a.InspectProject(path)
+		return projectAnalyzedMsg{scanID: scanID, project: p, warnings: warnings}
 	}
 }
 
-func processNextProject(a *analysis.Analyzer, paths []string) tea.Cmd {
+func processNextProject(scanID uint64, a *analysis.Analyzer, paths []string) tea.Cmd {
 	if len(paths) == 0 {
 		return nil
 	}
-	return inspectProjectCmd(a, paths[0])
+	return inspectProjectCmd(scanID, a, paths[0])
 }
 
 func StylePrimaryStyle() lipgloss.Style {

@@ -17,4 +17,3 @@ USER app
 WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/techtell"]
-CMD ["--version"]

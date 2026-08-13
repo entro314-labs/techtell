@@ -31,4 +31,5 @@ vendor/
 
 # GoReleaser
 dist/
+.release-public-key.asc
 .nope

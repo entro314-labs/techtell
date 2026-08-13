@@ -81,6 +81,10 @@ if [[ -n "$fingerprint" ]]; then
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     echo "GPG_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
   fi
+
+  public_key_file="${GITHUB_WORKSPACE:-$PWD}/.release-public-key.asc"
+  gpg --batch --armor --export "$fingerprint" > "$public_key_file"
+  [[ -s "$public_key_file" ]] || fail "Failed to export the release public key"
 fi
 
 echo "GPG setup complete${fingerprint:+ (fingerprint: $fingerprint)}"

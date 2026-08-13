@@ -12,7 +12,7 @@ on:
     inputs:
       tag:
         description: 'Tag to release (e.g., v1.0.0)'
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -21,9 +21,8 @@ permissions:
   id-token: write
 
 env:
-  GO_VERSION: "1.26"
-  CI_SCRIPTS_REPO: "idominikosgr/ci-scripts"
-  CI_SCRIPTS_VERSION: "v0.1.0"
+  GO_VERSION: "1.26.5"
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -35,6 +34,20 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Manual releases must be dispatched from the main branch" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$RELEASE_TAG"
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -67,7 +80,7 @@ jobs:
         run: |
           docker buildx ls
           docker run --privileged --rm tonistiigi/binfmt --install all
-          echo "BUILDER_NAME=${BUILDER_NAME}" >> $GITHUB_ENV
+          echo "BUILDER_NAME=${BUILDER_NAME}" >> "$GITHUB_ENV"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -82,25 +95,13 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
 
-      - name: Fetch shared CI scripts
-        shell: bash
-        run: |
-          mkdir -p .ci-bin
-          script_url="https://raw.githubusercontent.com/${CI_SCRIPTS_REPO}/${CI_SCRIPTS_VERSION}/release/setup-gpg-ci.sh"
-
-          if curl -fsSL "$script_url" -o .ci-bin/setup-gpg-ci.sh; then
-            echo "Using shared ci-scripts: ${CI_SCRIPTS_REPO}@${CI_SCRIPTS_VERSION}"
-          else
-            echo "Shared script unavailable, using repository-local fallback"
-            cp ./scripts/release/setup-gpg-ci.sh .ci-bin/setup-gpg-ci.sh
-          fi
-
       - name: Prepare GPG signing in CI
         shell: bash
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PRIVATE_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
-        run: bash ./.ci-bin/setup-gpg-ci.sh
+          GPG_PASSWORD: ${{ secrets.GPG_PASSWORD }}
+        run: bash ./scripts/release/setup-gpg-ci.sh
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -113,7 +114,7 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
-          COSIGN_PWD: ${{ secrets.COSIGN_PWD }}
+          GPG_PASSWORD: ${{ secrets.GPG_PASSWORD }}
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
@@ -140,7 +141,7 @@ jobs:
       - name: Verify GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           REPO: ${{ github.repository }}
         run: |
           echo "Checking release for tag: $TAG"
@@ -149,7 +150,7 @@ jobs:
       - name: Test installation (Go)
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           go install "github.com/${REPO}/cmd/techtell@${TAG}"
           techtell --version
@@ -157,7 +158,7 @@ jobs:
       - name: Test Docker image
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           VERSION="${TAG#v}"
           docker pull "ghcr.io/${REPO}:${VERSION}"

@@ -1,0 +1,14 @@
+.git
+.github
+.release-secrets
+.release-public-key.asc
+.env
+.env.*
+build
+dist
+coverage.out
+coverage.html
+*.prof
+*.pgo
+techtell
+techtell.exe

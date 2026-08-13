@@ -66,4 +66,4 @@ echo "  - $b64_file"
 echo
 echo "Set CI secret 'GPG_PRIVATE_KEY' to the .asc content (preferred)."
 echo "Or set 'GPG_PRIVATE_KEY_B64' to the .txt content."
-echo "Set CI secret 'COSIGN_PWD' to the key passphrase used for signing."
+echo "Set CI secret 'GPG_PASSWORD' to the key passphrase used for signing."

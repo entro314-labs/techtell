@@ -33,6 +33,9 @@ func BarChart(data map[string]int, width int) string {
 	}
 
 	sort.Slice(keys, func(i, j int) bool {
+		if displayData[keys[i]] == displayData[keys[j]] {
+			return keys[i] < keys[j]
+		}
 		return displayData[keys[i]] > displayData[keys[j]]
 	})
 
@@ -89,4 +92,16 @@ func BarChart(data map[string]int, width int) string {
 	}
 
 	return sb.String()
+}
+
+func topCategory(data map[string]int) (string, int) {
+	topName := "N/A"
+	topCount := 0
+	for name, count := range data {
+		if count > topCount || (count == topCount && count > 0 && (topName == "N/A" || name < topName)) {
+			topName = name
+			topCount = count
+		}
+	}
+	return topName, topCount
 }

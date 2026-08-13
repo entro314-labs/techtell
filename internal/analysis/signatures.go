@@ -10,7 +10,7 @@ type MatchType string
 const (
 	MatchTypeFile       MatchType = "file"
 	MatchTypeExtension  MatchType = "extension"
-	MatchTypeContent    MatchType = "content" // Reserved for future use
+	MatchTypeContent    MatchType = "content"
 	MatchTypeDependency MatchType = "dependency"
 )
 
@@ -45,8 +45,7 @@ var Signatures = []TechSignature{
 	{Name: "Shell", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".sh", ".bash", ".zsh"}},
 
 	// Frameworks & Libraries (naive file-based detection)
-	{Name: "React", Category: "Framework", MatchType: MatchTypeExtension, Identifiers: []string{".jsx", ".tsx"}}, // Heuristic
-	{Name: "React", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"react"}},       // Dependency match
+	{Name: "React", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"react"}},
 	{Name: "Next.js", Category: "Framework", MatchType: MatchTypeFile, Identifiers: []string{"next.config.js", "next.config.mjs", "next.config.ts"}},
 	{Name: "Next.js", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"next"}},
 	{Name: "Vue.js", Category: "Framework", MatchType: MatchTypeExtension, Identifiers: []string{".vue"}},
@@ -68,7 +67,7 @@ var Signatures = []TechSignature{
 	{Name: "Lipgloss", Category: "Library", MatchType: MatchTypeDependency, Identifiers: []string{"github.com/charmbracelet/lipgloss"}},
 
 	// Rust / Tauri
-	{Name: "Tauri", Category: "Framework", MatchType: MatchTypeFile, Identifiers: []string{"tauri.conf.json"}},
+	{Name: "Tauri", Category: "Framework", MatchType: MatchTypeFile, Identifiers: []string{"tauri.conf.json", "src-tauri/tauri.conf.json"}},
 	{Name: "Tauri", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"tauri", "tauri-build"}},
 	{Name: "Serde", Category: "Library", MatchType: MatchTypeDependency, Identifiers: []string{"serde"}},
 	{Name: "Tokio", Category: "Library", MatchType: MatchTypeDependency, Identifiers: []string{"tokio"}},
@@ -78,26 +77,10 @@ var Signatures = []TechSignature{
 
 	// Gradle / Java / Kotlin
 	{Name: "Gradle", Category: "Build Tool", MatchType: MatchTypeFile, Identifiers: []string{"build.gradle", "build.gradle.kts", "gradlew"}},
-	{Name: "Spring Boot", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"spring-boot-starter"}},
+	{Name: "Spring Boot", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"org.springframework.boot"}},
 	{Name: "Ktor", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"ktor-server-core"}},
 	{Name: "Android", Category: "Framework", MatchType: MatchTypeDependency, Identifiers: []string{"com.android.application", "com.android.library", "androidx.core"}},
 	{Name: "Hibernate", Category: "Library", MatchType: MatchTypeDependency, Identifiers: []string{"hibernate-core"}},
-
-	// Package Managers
-	{Name: "go mod", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"go.mod"}},
-	{Name: "cargo", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Cargo.toml"}},
-	{Name: "pip", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"requirements.txt"}},
-	{Name: "pipenv", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Pipfile"}},
-	{Name: "uv", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"uv.lock"}},
-	{Name: "poetry/pip", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pyproject.toml"}},
-	{Name: "Maven", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pom.xml"}},
-	{Name: "Bundler", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"Gemfile"}},
-	{Name: "Composer", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"composer.json"}},
-	{Name: "Gradle", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"build.gradle", "build.gradle.kts", "gradlew"}},
-	{Name: "NPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"package-lock.json"}},
-	{Name: "Yarn", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"yarn.lock"}},
-	{Name: "PNPM", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"pnpm-lock.yaml"}},
-	{Name: "Bun", Category: "Package Manager", MatchType: MatchTypeFile, Identifiers: []string{"bun.lockb"}},
 
 	// Tools (Shell & Others)
 	{Name: "Shell Script", Category: "Language", MatchType: MatchTypeExtension, Identifiers: []string{".sh", ".bash", ".zsh"}},
@@ -110,7 +93,6 @@ var Signatures = []TechSignature{
 
 	// Tools & Configs
 	{Name: "Docker", Category: "DevOps", MatchType: MatchTypeFile, Identifiers: []string{"Dockerfile", "docker-compose.yml", "docker-compose.yaml"}},
-	{Name: "Kubernetes", Category: "DevOps", MatchType: MatchTypeExtension, Identifiers: []string{".yaml", ".yml"}},
 	{Name: "Git", Category: "Tool", MatchType: MatchTypeFile, Identifiers: []string{".gitignore"}},
 	{Name: "GitHub Actions", Category: "DevOps", MatchType: MatchTypeFile, Identifiers: []string{".github"}},
 	{Name: "Makefile", Category: "Build Tool", MatchType: MatchTypeFile, Identifiers: []string{"Makefile"}},

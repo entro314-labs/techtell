@@ -1,6 +1,6 @@
 # GoReleaser Configuration - techtell
 # Features: multi-platform builds, Homebrew/Winget/AUR/Docker/nfpms,
-#           SBOM generation, Cosign signing, conditional secret guards
+#           SBOM generation, GPG artifact signing, and Cosign image signing
 #
 # Documentation: https://goreleaser.com
 
@@ -19,7 +19,7 @@ env:
 # =============================================================================
 before:
   hooks:
-    - go mod tidy
+    - go mod download
     - go mod verify
     - go test ./...
 
@@ -54,6 +54,8 @@ builds:
 # =============================================================================
 universal_binaries:
   - id: techtell-universal
+    ids:
+      - techtell
     name_template: techtell
     replace: true
 
@@ -80,7 +82,6 @@ archives:
     files:
       - LICENSE*
       - README*
-      - CHANGELOG*
 
 # =============================================================================
 # Checksums
@@ -140,6 +141,8 @@ release:
   draft: false
   prerelease: auto
   mode: replace
+  extra_files:
+    - glob: .release-public-key.asc
   header: |
     ## techtell {{ .Tag }}
 
@@ -152,7 +155,7 @@ release:
 
     ### Homebrew (macOS/Linux)
     ```bash
-    brew install --cask entro314-labs/homebrew-tap/techtell
+    brew install --cask entro314-labs/tap/techtell
     ```
 
     ### Winget (Windows)
@@ -167,7 +170,7 @@ release:
 
     ### Go Install
     ```bash
-    go install github.com/entro314-labs/techtell@{{ .Tag }}
+    go install github.com/entro314-labs/techtell/cmd/techtell@{{ .Tag }}
     ```
 
     ### Docker
@@ -179,6 +182,8 @@ release:
     Download the appropriate binary for your platform from the assets below.
 
     **Full Changelog**: https://github.com/entro314-labs/techtell/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    **GPG signing fingerprint**: `{{ .Env.GPG_FINGERPRINT }}`
 
 # =============================================================================
 # Homebrew Cask
@@ -319,7 +324,10 @@ dockers_v2:
 # =============================================================================
 docker_signs:
   - artifacts: all
-    stdin: "{{ .Env.COSIGN_PWD }}"
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - --yes
 
 # =============================================================================
 # SBOM (Software Bill of Materials)
@@ -335,15 +343,25 @@ sboms:
       - "${artifact}.spdx.json"
 
 # =============================================================================
-# Artifact Signing (Cosign)
+# Artifact Signing (GPG)
 # =============================================================================
 signs:
   - id: checksum-sign
     artifacts: checksum
-    stdin: "{{ .Env.COSIGN_PWD }}"
-  - id: artifacts-sign
-    artifacts: all
-    stdin: "{{ .Env.COSIGN_PWD }}"
+    args:
+      - --batch
+      - --yes
+      - --pinentry-mode
+      - loopback
+      - --passphrase-fd
+      - "0"
+      - --local-user
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - --output
+      - "${signature}"
+      - --detach-sign
+      - "${artifact}"
+    stdin: "{{ .Env.GPG_PASSWORD }}"
 
 # =============================================================================
 # Source archive

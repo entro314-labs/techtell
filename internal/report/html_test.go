@@ -52,4 +52,39 @@ func TestGenerateHTML_XSS(t *testing.T) {
 	if !strings.Contains(htmlContent, "permission denied while scanning /tmp/foo") {
 		t.Errorf("expected warnings section to include scan warning")
 	}
+	if strings.Contains(htmlContent, "<code>/tmp/bad") {
+		t.Errorf("expected project inventory path to be relative to the scanned root")
+	}
+	if strings.Contains(htmlContent, "scanned: <code>/tmp</code>") {
+		t.Errorf("shareable report must not expose the absolute scan root")
+	}
+}
+
+func TestGeneratePieChart_SingleCategoryRendersFullCircle(t *testing.T) {
+	out := generatePieChart([]ChartItem{{Name: "Go", Count: 1, Percent: 100, Color: "#fff"}}, 100, 100, 80)
+	if !strings.Contains(out, "<circle") {
+		t.Fatalf("expected a full circle for a single category, got %q", out)
+	}
+	if strings.Contains(out, " A ") {
+		t.Fatalf("single-category pie must not use a degenerate arc: %q", out)
+	}
+}
+
+func TestGenerateHTML_AggregatesOverflowLanguages(t *testing.T) {
+	r := analysis.NewWorkspaceReport()
+	for i, name := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I"} {
+		r.LangCounts[name] = i + 1
+	}
+	r.TotalProjects = 45
+
+	out := GenerateHTML(r, "/workspace")
+	if !strings.Contains(out, ">Other<") {
+		t.Fatalf("expected overflow language categories to be represented as Other")
+	}
+}
+
+func TestGetTopName_DeterministicTie(t *testing.T) {
+	if got := getTopName(map[string]int{"Zulu": 1, "Alpha": 1}); got != "Alpha" {
+		t.Fatalf("expected alphabetical tie-break, got %q", got)
+	}
 }

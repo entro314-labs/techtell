@@ -28,7 +28,7 @@ Then set in CI secrets:
 
 - `GPG_PRIVATE_KEY` (preferred; ASCII-armored private key content)
   - or `GPG_PRIVATE_KEY_B64` (base64 fallback)
-- `COSIGN_PWD` (the key passphrase)
+- `GPG_PASSWORD` (the GPG key passphrase)
 
 ## 3) CI setup pattern (portable)
 
@@ -37,7 +37,8 @@ In each CI pipeline before `goreleaser release`:
 1. Normalize `GNUPGHOME` (`~/.gnupg` must be a directory)
 2. Import key from secret env
 3. Set trust/fingerprint non-interactively
-4. Run GoReleaser signing
+4. Export `.release-public-key.asc` for publication with the release
+5. Run GoReleaser signing
 
 This repository uses:
 
@@ -47,30 +48,29 @@ bash ./scripts/release/setup-gpg-ci.sh
 
 ## 4) Reuse across multiple projects
 
-To roll this out consistently:
-
-- Publish a shared `ci-scripts` repository and tag versions (for example `v0.1.0`).
-- In each project CI, fetch `release/setup-gpg-ci.sh` from the pinned tag.
-- Keep `scripts/release/setup-gpg-ci.sh` in-project only as fallback/bootstrap.
-
-For non-GitHub CI providers, the same script works as long as env vars are present.
+Keep a reviewed copy of `scripts/release/setup-gpg-ci.sh` in each project so the workflow and signing contract change together. For non-GitHub CI providers, the same script works as long as the required environment variables are present.
 
 Required env vars:
 
 - `GPG_PRIVATE_KEY` (or `GPG_PRIVATE_KEY_B64`)
-- `COSIGN_PWD`
-
-GitHub Actions pattern:
-
-```yaml
-env:
-  CI_SCRIPTS_REPO: idominikosgr/ci-scripts
-  CI_SCRIPTS_VERSION: v0.1.0
-```
+- `GPG_PASSWORD`
 
 ## 5) Verification for users
 
-Users should verify checksums/signatures and trust your public key fingerprint published in docs/release notes.
+Each release publishes `checksums.txt`, `checksums.txt.sig`, and `.release-public-key.asc`. Users must compare the key fingerprint with a trusted, independently published fingerprint before importing it, then run:
+
+```bash
+gpg --import .release-public-key.asc
+gpg --verify checksums.txt.sig checksums.txt
+```
+
+Container images are signed separately with keyless Cosign using the GitHub Actions OIDC identity. Verify that identity and issuer explicitly:
+
+```bash
+cosign verify ghcr.io/entro314-labs/techtell:<version> \
+  --certificate-identity-regexp '^https://github.com/entro314-labs/techtell/.github/workflows/release\.yml@refs/(tags/v[0-9].*|heads/main)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## SSH signing vs GPG signing
 

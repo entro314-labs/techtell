@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -109,9 +110,9 @@ func (a *Analyzer) DiscoverProjects(ctx context.Context, updateChan chan<- strin
 }
 
 // InspectProject analyzes a single project path
-func (a *Analyzer) InspectProject(path string) Project {
+func (a *Analyzer) InspectProject(path string) (Project, []string) {
 	name := filepath.Base(path)
-	return identProject(path, name)
+	return identProject(path, name, a.exclude)
 }
 
 func isExcluded(name string, excludes []string) bool {
@@ -136,7 +137,7 @@ func isProjectRoot(path string) bool {
 		"CMakeLists.txt",
 	}
 	for _, m := range markers {
-		if _, err := os.Stat(filepath.Join(path, m)); err == nil {
+		if info, err := os.Stat(filepath.Join(path, m)); err == nil && info.Mode().IsRegular() {
 			return true
 		}
 	}
@@ -144,19 +145,24 @@ func isProjectRoot(path string) bool {
 }
 
 type projectContext struct {
-	files        []string
-	content      map[string]string // filename -> content (for content signatures)
-	dependencies map[string]struct{}
+	files            []string
+	sourceFiles      []string
+	content          map[string]string // dependency manifest filename -> content
+	signatureContent map[string]string
+	dependencies     map[string]struct{}
+	warnings         []string
 }
 
-func loadProjectContext(root string) *projectContext {
+func loadProjectContext(root string, excludes []string) *projectContext {
 	ctx := &projectContext{
-		content:      make(map[string]string),
-		dependencies: make(map[string]struct{}),
+		content:          make(map[string]string),
+		signatureContent: make(map[string]string),
+		dependencies:     make(map[string]struct{}),
 	}
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		ctx.warnings = append(ctx.warnings, fmt.Sprintf("reading project root %s failed: %v", root, err))
 		return ctx
 	}
 
@@ -168,7 +174,7 @@ func loadProjectContext(root string) *projectContext {
 
 	depCandidates := []string{
 		"package.json", "go.mod", "Cargo.toml",
-		"requirements.txt", "pyproject.toml", "Pipfile", "uv.lock",
+		"requirements.txt", "pyproject.toml", "Pipfile",
 		"build.gradle", "build.gradle.kts", "pom.xml", "cpanfile", "Gemfile", "composer.json",
 	}
 
@@ -178,6 +184,7 @@ func loadProjectContext(root string) *projectContext {
 		}
 		b, err := os.ReadFile(filepath.Join(root, d))
 		if err != nil {
+			ctx.warnings = append(ctx.warnings, fmt.Sprintf("reading dependency manifest %s failed: %v", filepath.Join(root, d), err))
 			continue
 		}
 		raw := string(b)
@@ -189,6 +196,7 @@ func loadProjectContext(root string) *projectContext {
 		}
 		deps, err := parser(b)
 		if err != nil {
+			ctx.warnings = append(ctx.warnings, fmt.Sprintf("parsing dependency manifest %s failed: %v", filepath.Join(root, d), err))
 			continue
 		}
 		for _, dep := range deps {
@@ -213,18 +221,40 @@ func loadProjectContext(root string) *projectContext {
 		}
 		b, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
+			ctx.warnings = append(ctx.warnings, fmt.Sprintf("reading signature source %s failed: %v", filepath.Join(root, name), err))
 			continue
 		}
 		if len(b) > 256*1024 {
 			continue
 		}
-		ctx.content[name] = string(b)
+		ctx.signatureContent[name] = string(b)
+	}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			ctx.warnings = append(ctx.warnings, fmt.Sprintf("checking project source %s failed: %v", path, walkErr))
+			return nil
+		}
+		if d.IsDir() {
+			if path == root {
+				return nil
+			}
+			if isExcluded(d.Name(), excludes) || isProjectRoot(path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ctx.sourceFiles = append(ctx.sourceFiles, d.Name())
+		return nil
+	})
+	if err != nil {
+		ctx.warnings = append(ctx.warnings, fmt.Sprintf("walking project source %s failed: %v", root, err))
 	}
 
 	return ctx
 }
 
-func identProject(root string, name string) Project {
+func identProject(root string, name string, excludes []string) (Project, []string) {
 	p := Project{
 		Name:           name,
 		Path:           root,
@@ -233,7 +263,7 @@ func identProject(root string, name string) Project {
 		PackageManager: "Unknown",
 	}
 
-	ctx := loadProjectContext(root)
+	ctx := loadProjectContext(root, excludes)
 
 	for _, sig := range Signatures {
 		matched := false
@@ -260,7 +290,7 @@ func identProject(root string, name string) Project {
 				}
 			}
 		case MatchTypeExtension:
-			for _, f := range ctx.files {
+			for _, f := range ctx.sourceFiles {
 				if sig.Matches(f) {
 					matched = true
 					break
@@ -278,7 +308,7 @@ func identProject(root string, name string) Project {
 				}
 			}
 		case MatchTypeContent:
-			for _, content := range ctx.content {
+			for _, content := range ctx.signatureContent {
 				lowerContent := strings.ToLower(content)
 				for _, id := range sig.Identifiers {
 					if strings.Contains(lowerContent, strings.ToLower(id)) {
@@ -298,7 +328,7 @@ func identProject(root string, name string) Project {
 	}
 
 	refineProject(&p, ctx)
-	return p
+	return p, ctx.warnings
 }
 
 func applySignature(p *Project, sig TechSignature) {
@@ -349,26 +379,16 @@ func refineProject(p *Project, ctx *projectContext) {
 		}
 	}
 
-	hasMise := hasAnyFile(ctx, "mise.toml", ".mise.toml")
-	if hasMise {
-		if p.PackageManager == "Unknown" || p.PackageManager == "" {
-			p.PackageManager = "mise"
-		} else {
-			p.PackageManager = "mise+" + p.PackageManager
-		}
-	} else if p.PackageManager == "Unknown" || p.PackageManager == "" {
-		switch {
-		case hasFile(ctx, "go.mod"):
-			p.PackageManager = "go mod"
-		case hasFile(ctx, "Cargo.toml"):
-			p.PackageManager = "cargo"
-		case hasFile(ctx, "requirements.txt"):
-			p.PackageManager = "pip"
-		case hasFile(ctx, "Pipfile"):
-			p.PackageManager = "pipenv"
-		case hasFile(ctx, "uv.lock"):
-			p.PackageManager = "uv"
-		}
+	var packageManagerSignals []string
+	p.PackageManager, packageManagerSignals = detectPackageManager(p.Language, ctx)
+	if len(packageManagerSignals) > 1 {
+		ctx.warnings = append(ctx.warnings, fmt.Sprintf(
+			"project %s has conflicting package manager signals (%s); selected %s",
+			p.Path, strings.Join(packageManagerSignals, ", "), p.PackageManager,
+		))
+	}
+	if hasAnyFile(ctx, "mise.toml", ".mise.toml") {
+		p.Tags = unique(append(p.Tags, "mise"))
 	}
 
 	switch p.Stack {
@@ -381,6 +401,97 @@ func refineProject(p *Project, ctx *projectContext) {
 	if (p.Language == "JavaScript" || p.Language == "TypeScript") && p.Stack == "Unknown" {
 		p.Stack = "Node.js Project"
 	}
+}
+
+func detectPackageManager(language string, ctx *projectContext) (string, []string) {
+	if language == "JavaScript" || language == "TypeScript" {
+		var declared string
+		if raw, ok := ctx.content["package.json"]; ok {
+			var pkg struct {
+				PackageManager string `json:"packageManager"`
+			}
+			if err := json.Unmarshal([]byte(raw), &pkg); err == nil {
+				if name := strings.TrimSpace(strings.SplitN(pkg.PackageManager, "@", 2)[0]); name != "" {
+					declared = strings.ToLower(name)
+				}
+			}
+		}
+		signals := packageManagerSignals(ctx, []struct {
+			name  string
+			files []string
+		}{
+			{name: "bun", files: []string{"bun.lock", "bun.lockb"}},
+			{name: "pnpm", files: []string{"pnpm-lock.yaml"}},
+			{name: "yarn", files: []string{"yarn.lock"}},
+			{name: "npm", files: []string{"package-lock.json", "npm-shrinkwrap.json"}},
+		})
+		if declared != "" {
+			signals = uniqueStrings(append(signals, declared))
+			sort.Strings(signals)
+			return declared, signals
+		}
+		if len(signals) > 0 {
+			return signals[0], signals
+		}
+	}
+
+	if language == "Python" {
+		signals := make([]string, 0, 5)
+		if hasFile(ctx, "uv.lock") {
+			signals = append(signals, "uv")
+		}
+		if hasFile(ctx, "Pipfile") {
+			signals = append(signals, "pipenv")
+		}
+		if hasFile(ctx, "poetry.lock") || contentContains(ctx, "pyproject.toml", "[tool.poetry]") {
+			signals = append(signals, "poetry")
+		}
+		if hasFile(ctx, "pdm.lock") || contentContains(ctx, "pyproject.toml", "[tool.pdm]") {
+			signals = append(signals, "pdm")
+		}
+		if hasFile(ctx, "requirements.txt") {
+			signals = append(signals, "pip")
+		}
+		signals = uniqueStrings(signals)
+		if len(signals) > 0 {
+			return signals[0], signals
+		}
+	}
+
+	switch {
+	case hasFile(ctx, "go.mod"):
+		return "go mod", []string{"go mod"}
+	case hasFile(ctx, "Cargo.toml"):
+		return "cargo", []string{"cargo"}
+	case hasFile(ctx, "pom.xml"):
+		return "maven", []string{"maven"}
+	case hasAnyFile(ctx, "build.gradle", "build.gradle.kts", "gradlew"):
+		return "gradle", []string{"gradle"}
+	case hasFile(ctx, "Gemfile"):
+		return "bundler", []string{"bundler"}
+	case hasFile(ctx, "composer.json"):
+		return "composer", []string{"composer"}
+	default:
+		return "Unknown", nil
+	}
+}
+
+func packageManagerSignals(ctx *projectContext, markers []struct {
+	name  string
+	files []string
+}) []string {
+	var signals []string
+	for _, marker := range markers {
+		if hasAnyFile(ctx, marker.files...) {
+			signals = append(signals, marker.name)
+		}
+	}
+	return signals
+}
+
+func contentContains(ctx *projectContext, filename, needle string) bool {
+	content, ok := ctx.content[filename]
+	return ok && strings.Contains(strings.ToLower(content), strings.ToLower(needle))
 }
 
 func unique(slice []string) []string {

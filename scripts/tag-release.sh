@@ -112,7 +112,7 @@ if [[ -z "$latest_tag" ]]; then
   latest_tag="${prefix}0.0.0"
 fi
 
-base_version="${latest_tag#${prefix}}"
+base_version="${latest_tag#"${prefix}"}"
 if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fail "Latest tag '$latest_tag' is not a valid semantic version"
 fi
@@ -160,6 +160,9 @@ if [[ "$dry_run" == "true" ]]; then
 fi
 
 git tag -a "$new_tag" -m "$message"
-git push "$remote" "$new_tag"
+if ! git push "$remote" "$new_tag"; then
+  git tag -d "$new_tag" >/dev/null
+  fail "Push failed; removed local tag '$new_tag' so the release can be retried safely"
+fi
 
 echo "Done: created and pushed tag '${new_tag}'"

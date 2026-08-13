@@ -1,7 +1,7 @@
 # =============================================================================
 # Builder stage
 # =============================================================================
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -45,4 +45,3 @@ LABEL org.opencontainers.image.title="techtell" \
       org.opencontainers.image.vendor="entro314-labs"
 
 ENTRYPOINT ["/usr/local/bin/techtell"]
-CMD ["--version"]
