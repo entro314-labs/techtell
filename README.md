@@ -28,7 +28,7 @@ It presents results in an interactive dashboard and can export reports as Markdo
 
 ## Requirements
 
-- Go **1.26.5+**
+- Go **1.27.4+**
 - A terminal that supports interactive TUIs
 
 ## Quick start
